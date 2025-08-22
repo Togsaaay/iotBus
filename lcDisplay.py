@@ -3,12 +3,10 @@ import time
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 
-# ===== LCD Setup =====
-I2C_ADDR = 0x27  # I2C address for 20x4 LCD with I2C module
+I2C_ADDR = 0x27
 i2c = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
-lcd = I2cLcd(i2c, I2C_ADDR, 4, 20)  # 4 rows, 20 columns
+lcd = I2cLcd(i2c, I2C_ADDR, 4, 20)
 
-# ===== Keypad Setup =====
 keys = [
     ['1', '2', '3', 'A'],
     ['4', '5', '6', 'B'],
@@ -20,7 +18,6 @@ row_pins = [Pin(13, Pin.OUT), Pin(12, Pin.OUT), Pin(14, Pin.OUT), Pin(27, Pin.OU
 col_pins = [Pin(26, Pin.IN, Pin.PULL_DOWN), Pin(25, Pin.IN, Pin.PULL_DOWN),
             Pin(23, Pin.IN, Pin.PULL_DOWN), Pin(32, Pin.IN, Pin.PULL_DOWN)]
 
-# ===== LCD Display Function =====
 def show_message(line1="", line2="", line3="", line4=""):
     lcd.clear()
     lcd.move_to(0, 0)
@@ -32,26 +29,22 @@ def show_message(line1="", line2="", line3="", line4=""):
     lcd.move_to(0, 3)
     lcd.putstr(line4[:20])
 
-# ===== Keypad Scan Function with Debounce =====
 def scan_keypad():
     for row_num, row_pin in enumerate(row_pins):
-        # Reset all rows
+
         for r in row_pins:
             r.value(0)
-        # Set current row high
+
         row_pin.value(1)
         for col_num, col_pin in enumerate(col_pins):
             if col_pin.value() == 1:
-                time.sleep(0.02)  # debounce delay
-                if col_pin.value() == 1:  # check again
+                time.sleep(0.02)
+                if col_pin.value() == 1:
                     return keys[row_num][col_num]
     return None
 
-# ===== Initial LCD Message =====
 show_message("1=FULL  A=STANDING", "2=AVAILABLE", "4=INACTIVE", "5=HELP ME!")
 
-
-# ===== Main Loop ====
 last_key = None
 show_message("1=FULL  A=STANDING", "2=AVAILABLE", "4=INACTIVE", "5=HELP ME!")
 
