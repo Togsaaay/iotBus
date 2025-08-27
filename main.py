@@ -5,6 +5,9 @@ import utime
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 
+import time
+import struct
+
 # Import for HTTP requests and WiFi
 try:
     import urequests as requests
