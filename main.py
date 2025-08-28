@@ -32,14 +32,16 @@ HEALTH_URL = "https://ridealert-backend-production.up.railway.app/health"
 PREDICT_URL = "https://ridealert-backend-production.up.railway.app/predict"
 REFRESH_INTERVAL = 7.5  # seconds
 
-# Device identification
+
 VEHICLE_ID = "BUS_001"  # Static vehicle identifier
 DEVICE_ID = "ESP32_GPS_IMU_001"  # Static device identifier
 
-# WiFi credentials (CHANGE THESE TO YOUR ACTUAL WIFI)
-WIFI_SSID = "Kugmo"  # Replace with your WiFi name
-WIFI_PASSWORD = "Hifumi05"  # Replace with your WiFi password
 
+
+# WiFi credentials 
+# NEED TO CHANGE/DELETE THIS AND REPLACE WITH GSM CODE
+WIFI_SSID = "WIFI_NAME_HERE"  
+WIFI_PASSWORD = "PASSWORD_HERE"  
 # Status tracking
 wifi_connected = False
 last_health_status = "Unknown"
@@ -107,6 +109,7 @@ def ping_health_endpoint():
         }
 
         response = requests.get(HEALTH_URL, headers=headers, timeout=10)
+        # post with signed JWT token device id
 
         print(f"Response status: {response.status_code}")
 
