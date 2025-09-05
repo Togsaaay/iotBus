@@ -4,26 +4,8 @@ import struct
 import utime
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
+import urequests as requests
 
-
-# Import for HTTP requests and WiFi
-try:
-    import urequests as requests
-    import network
-    HTTP_AVAILABLE = True
-    WIFI_AVAILABLE = True
-    print("HTTP and WiFi modules available")
-except ImportError:
-    try:
-        import requests
-        import network
-        HTTP_AVAILABLE = True
-        WIFI_AVAILABLE = True
-        print("HTTP and WiFi modules available (standard)")
-    except ImportError:
-        HTTP_AVAILABLE = False
-        WIFI_AVAILABLE = False
-        print("HTTP/WiFi modules not available")
 
 # Health check and prediction configuration
 HEALTH_URL = "https://ridealert-backend-production.up.railway.app/health"
@@ -35,106 +17,27 @@ VEHICLE_ID = "BUS_001"  # Static vehicle identifier
 DEVICE_ID = "ESP32_GPS_IMU_001"  # Static device identifier
 
 
-
-# WiFi credentials 
-# NEED TO CHANGE/DELETE THIS AND REPLACE WITH GSM CODE
-WIFI_SSID = "WIFI_NAME_HERE"  
-WIFI_PASSWORD = "PASSWORD_HERE"  
-# Status tracking
-wifi_connected = False
 last_health_status = "Unknown"
 last_prediction_status = "Unknown"
 
 
-def connect_wifi():
-    """Connect to WiFi network"""
-    if not WIFI_AVAILABLE:
-        print("WiFi not available")
-        return False
-
-    try:
-        wlan = network.WLAN(network.STA_IF)
-        wlan.active(True)
-
-        if wlan.isconnected():
-            print("Already connected to WiFi")
-            print(f"IP: {wlan.ifconfig()[0]}")
-            return True
-
-        print(f"Connecting to WiFi: {WIFI_SSID}")
-        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
-
-        # Wait for connection
-        timeout = 10
-        while timeout > 0:
-            if wlan.isconnected():
-                print(f"WiFi connected! IP: {wlan.ifconfig()[0]}")
-                return True
-            time.sleep(1)
-            timeout -= 1
-            print(".", end="")
-
-        print("\nWiFi connection failed")
-        return False
-
-    except Exception as e:
-        print(f"WiFi connection error: {e}")
-        return False
-
-
 def ping_health_endpoint():
-    """Make a proper GET request to the health endpoint"""
+    """Make a GET request to the health endpoint using GSM"""
     global last_health_status
 
-    if not HTTP_AVAILABLE:
-        print("HTTP not available - skipping health check")
-        last_health_status = "No HTTP"
-        return False
-
-    # Check WiFi connection first
-    if not connect_wifi():
-        print("No WiFi connection - skipping health check")
-        last_health_status = "No WiFi"
+    if not gsm_enabled:
+        print("GSM not available - skipping health check")
+        last_health_status = "No GSM"
         return False
 
     try:
-        print(f"Making GET request to: {HEALTH_URL}")
-
-        # Make the GET request with proper headers
-        headers = {
-            'User-Agent': 'ESP32-IoT-Bus/1.0',
-            'Accept': 'application/json'
-        }
-
-        response = requests.get(HEALTH_URL, headers=headers, timeout=10)
-        # post with signed JWT token device id
-
-        print(f"Response status: {response.status_code}")
-
-        # Try to read response content
-        try:
-            content = response.text
-            print(f"Response content: {content[:100]}...")  # First 100 chars
-        except:
-            print("Could not read response content")
-
-        if response.status_code == 200:
-            print("✓ Health check successful")
-            last_health_status = "OK"
-            response.close()
-            return True
-        else:
-            print(f"✗ Health check failed with status: {response.status_code}")
-            last_health_status = f"HTTP {response.status_code}"
-            response.close()
-            return False
-
-    except OSError as e:
-        print(f"Network error: {e}")
-        last_health_status = "Network Error"
-        return False
+        print(f"Making GSM GET request to: {HEALTH_URL}")
+        gsm_http_get(HEALTH_URL)
+        last_health_status = "OK"
+        return True
     except Exception as e:
         print(f"Health check error: {e}")
+        last_health_status = "Error"
         return False
     
 
@@ -142,11 +45,8 @@ def display_system_status():
     """Display system status on LCD"""
     lcd.clear()
 
-    # Line 1: WiFi status
-    if wifi_connected:
-        lcd.putstr("WiFi: Connected")
-    else:
-        lcd.putstr("WiFi: Disconnected")
+    # Line 1: GSM status
+    lcd.putstr("GSM: Connected" if gsm_enabled else "GSM: Disconnected")
 
     # Line 2: GPS status
     lcd.move_to(0, 1)
@@ -205,15 +105,9 @@ def make_prediction_request(mpu_data):
     """Make a prediction request with GPS and IMU data"""
     global last_prediction_status
 
-    if not HTTP_AVAILABLE:
-        print("HTTP not available - skipping prediction")
-        last_prediction_status = "No HTTP"
-        return False
-
-    # Check WiFi connection
-    if not connect_wifi():
-        print("No WiFi connection - skipping prediction")
-        last_prediction_status = "No WiFi"
+    if not gsm_enabled:
+        print("GSM not available - skipping prediction")
+        last_prediction_status = "No GSM"
         return False
 
     # Get highest SNR satellite
@@ -613,7 +507,6 @@ show_message("Bus Online","Monitoring...")
 # this is the main loop
 loop_count=0
 http_timer=0
-HTTP_INTERVAL=30  # seconds
 
 while True:
     loop_count += 1
@@ -627,6 +520,7 @@ while True:
         elif key == 'A': current_status = "STANDING"
         elif key == '4': current_status = "INACTIVE"
         elif key == '5': current_status = "HELP REQUESTED"
+        elif key == '#': display_system_status()
         else: current_status = "INVALID"
         show_message("STATUS:", current_status)
         print("Key pressed:", key, "| Bus Status:", current_status)
