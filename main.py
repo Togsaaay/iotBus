@@ -45,6 +45,13 @@ def convert_coord(coord, direction):
         return str(round(decimal,6))+"°"
     except:
         return "0.0°"
+    
+def check_ssl_support():
+    resp = send_gsm_command("AT+HTTPSSL=?", wait_ms=2000)
+    if "+HTTPSSL:" in resp:
+        print("✅ SSL is supported on this SIM800L firmware.")
+    else:
+        print("❌ SSL is NOT supported on this SIM800L firmware.")
 
 def parse_nmea(sentence):
     if not sentence.startswith('$'): return
@@ -94,7 +101,7 @@ def gsm_status():
 # -------------------- GPRS and HTTP --------------------
 def gsm_gprs_connect(apn, user="", pwd=""):
     if not gsm_enabled: return False
-    print("Setting APN:", apn)
+    print("Setting APN:", apn)  
     send_gsm_command("AT+CGATT=1", wait_ms=1000)
     send_gsm_command('AT+CSTT="{}","{}","{}"'.format(apn,user,pwd), wait_ms=1000)
     send_gsm_command("AT+CIICR", wait_ms=4000)
@@ -111,30 +118,55 @@ def gsm_gprs_connect(apn, user="", pwd=""):
     return True if ip else False
 
 def gsm_http_get(url):
-    if not gsm_enabled: return
+    if not gsm_enabled: 
+        return
     print("HTTP GET:", url)
     send_gsm_command("AT+HTTPTERM", wait_ms=1000)
     send_gsm_command("AT+HTTPINIT", wait_ms=2000)
     send_gsm_command('AT+HTTPPARA="CID",1', wait_ms=1000)
     send_gsm_command('AT+HTTPPARA="URL","{}"'.format(url), wait_ms=1000)
     send_gsm_command('AT+HTTPPARA="USERDATA","User-Agent: ESP32-GSM"', wait_ms=1000)
-    
-    resp = send_gsm_command("AT+HTTPACTION=0", wait_ms=15000)
-    print("HTTPACTION Response:", resp)
-    
-    if "+HTTPACTION:" in resp:
+
+    # ✅ Enable SSL if URL is HTTPS
+    if url.startswith("https://"):
+        send_gsm_command("AT+HTTPSSL=1", wait_ms=1000)
+    else:
+        send_gsm_command("AT+HTTPSSL=0", wait_ms=500)
+
+    # Start GET request
+    gsm.write(b"AT+HTTPACTION=0\r\n")
+
+    # Wait for +HTTPACTION URC (may take several seconds)
+    action_resp = ""
+    for _ in range(40):  # wait up to 20s
+        utime.sleep_ms(500)
+        resp = gsm.read()
+        if resp:
+            try:
+                decoded = resp.decode("utf-8")
+            except:
+                decoded = str(resp)
+            action_resp += decoded
+            if "+HTTPACTION:" in decoded:
+                break
+
+    print("HTTPACTION Response:", action_resp.strip())
+
+    if "+HTTPACTION:" in action_resp:
         try:
-            parts = resp.split("+HTTPACTION: 0,")[1].split(",")
+            parts = action_resp.split("+HTTPACTION: 0,")[1].split(",")
             status_code = parts[0]
-            print("HTTP Status:", status_code)
+            length = int(parts[1])
+            print("HTTP Status:", status_code, "| Length:", length)
+
             if status_code == "200":
                 read_resp = send_gsm_command("AT+HTTPREAD", wait_ms=5000)
                 print("HTTPREAD Response:", read_resp)
             else:
                 print("HTTP request failed with status code:", status_code)
-                if status_code == "601": print("Error 601: Network error - check GPRS/SIM/APN")
-        except:
-            print("Error parsing HTTPACTION response")
+        except Exception as e:
+            print("Error parsing HTTPACTION response:", e)
+
     send_gsm_command("AT+HTTPTERM", wait_ms=1000)
 
 # -------------------- MPU6050 Setup --------------------
@@ -183,6 +215,7 @@ gsm_initialized=False
 
 if gsm_enabled:
     gsm_status()
+    check_ssl_support()
     if gsm_gprs_connect("internet","",""):
         gsm_initialized=True
         print("GPRS Connected.")
