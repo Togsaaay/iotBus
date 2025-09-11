@@ -5,11 +5,13 @@ import utime
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 import urequests as requests
+import _thread
+import json
 
 
 # Health check and prediction configuration
-HEALTH_URL = "https://ridealert-backend-production.up.railway.app/health"
-PREDICT_URL = "https://ridealert-backend-production.up.railway.app/predict"
+HEALTH_URL = " http://60ee3ba2f17650722b29736f77460b16.serveo.net/health"
+PREDICT_URL = " http://60ee3ba2f17650722b29736f77460b16.serveo.net/predict"
 REFRESH_INTERVAL = 7.5  # seconds
 
 
@@ -19,6 +21,10 @@ DEVICE_ID = "ESP32_GPS_IMU_001"  # Static device identifier
 
 last_health_status = "Unknown"
 last_prediction_status = "Unknown"
+
+# Thread control variables
+thread_running = True
+request_lock = False
 
 
 def ping_health_endpoint():
@@ -78,25 +84,30 @@ def get_highest_snr_satellite():
     print("Available satellites:")
     for svid, info in gps_data['satellite_info'].items():
         try:
-            # Extract SNR value (remove ' dBHz' suffix)
-            snr_value = float(info['snr'].split()[0])
+            # Extract SNR value (remove ' dBHz' suffix and clean)
+            snr_str = info['snr'].split()[0] if ' ' in info['snr'] else info['snr'].replace(' dBHz', '')
+            snr_value = safe_convert(snr_str, float, 0.0)
             print(f"  Satellite {svid}: SNR {snr_value} dBHz")
 
             if snr_value > highest_snr:
                 highest_snr = snr_value
+                elevation_str = info['elevation'].replace('°', '')
+                azimuth_str = info['azimuth'].replace('°', '')
+                
                 best_satellite = {
                     'svid': svid,
                     'snr': snr_value,
-                    'elevation': float(info['elevation'].replace('°', '')),
-                    'azimuth': float(info['azimuth'].replace('°', ''))
+                    'elevation': safe_convert(elevation_str, float, 0.0),
+                    'azimuth': safe_convert(azimuth_str, float, 0.0)
                 }
         except (ValueError, KeyError, IndexError) as e:
             print(f"  Satellite {svid}: Invalid data ({e})")
             continue
 
     if best_satellite:
-        print(
-            f"Selected satellite {best_satellite['svid']} with highest SNR: {best_satellite['snr']} dBHz")
+        print(f"Selected satellite {best_satellite['svid']} with highest SNR: {best_satellite['snr']} dBHz")
+    else:
+        print("No valid satellites found")
 
     return best_satellite
 
@@ -193,6 +204,183 @@ def make_prediction_request(mpu_data):
         print(f"Network error during prediction: {e}")
         last_prediction_status = "Network Error"
         return False
+
+
+# New GPRS POST request function with SSL disabled
+def gsm_http_post_gprs(url, payload, headers=None):
+    """Make HTTP POST request using GPRS with SSL disabled"""
+    if not gsm_enabled:
+        print("GSM not available")
+        return False
+    
+    global request_lock
+    if request_lock:
+        print("Request already in progress, skipping...")
+        return False
+    
+    request_lock = True
+    
+    try:
+        print("GPRS POST:", url)
+        
+        # Terminate any existing HTTP session
+        send_gsm_command("AT+HTTPTERM", wait_ms=1000)
+        
+        # Initialize HTTP service
+        send_gsm_command("AT+HTTPINIT", wait_ms=2000)
+        
+        # Set HTTP parameters
+        send_gsm_command('AT+HTTPPARA="CID",1', wait_ms=1000)
+        send_gsm_command(f'AT+HTTPPARA="URL","{url}"', wait_ms=1000)
+        
+        # Disable SSL (important for HTTP)
+        send_gsm_command('AT+HTTPSSL=0', wait_ms=1000)
+        
+        # Set content type
+        send_gsm_command('AT+HTTPPARA="CONTENT","application/json"', wait_ms=1000)
+        
+        # Set user agent
+        send_gsm_command('AT+HTTPPARA="USERDATA","User-Agent: ESP32-GSM-IoT/1.0"', wait_ms=1000)
+        
+        # Convert payload to JSON string
+        json_data = json.dumps(payload)
+        data_length = len(json_data)
+        
+        print(f"Payload length: {data_length} bytes")
+        print(f"Payload: {json_data}")
+        
+        # Set data length and input data
+        send_gsm_command(f'AT+HTTPDATA={data_length},10000', wait_ms=1000)
+        
+        # Send the actual data
+        if gsm:
+            gsm.write(json_data.encode())
+            utime.sleep_ms(2000)  # Wait for data to be accepted
+        
+        # Execute POST request
+        resp = send_gsm_command("AT+HTTPACTION=1", wait_ms=15000)  # 1 = POST
+        print("HTTPACTION Response:", resp)
+        
+        success = False
+        if "+HTTPACTION:" in resp:
+            try:
+                parts = resp.split("+HTTPACTION: 1,")[1].split(",")
+                status_code = parts[0]
+                data_length = parts[1] if len(parts) > 1 else "0"
+                print(f"HTTP Status: {status_code}, Data Length: {data_length}")
+                
+                if status_code == "200":
+                    # Read response data
+                    read_resp = send_gsm_command("AT+HTTPREAD", wait_ms=5000)
+                    print("HTTPREAD Response:", read_resp)
+                    success = True
+                else:
+                    print(f"HTTP POST failed with status code: {status_code}")
+                    if status_code == "601": 
+                        print("Error 601: Network error - check GPRS/SIM/APN")
+                    elif status_code == "602":
+                        print("Error 602: Connection timeout")
+                    elif status_code == "603":
+                        print("Error 603: DNS resolution failed")
+            except Exception as parse_error:
+                print(f"Error parsing HTTPACTION response: {parse_error}")
+        
+        # Terminate HTTP session
+        send_gsm_command("AT+HTTPTERM", wait_ms=1000)
+        
+        return success
+        
+    except Exception as e:
+        print(f"GPRS POST Error: {e}")
+        send_gsm_command("AT+HTTPTERM", wait_ms=1000)  # Clean up on error
+        return False
+    finally:
+        request_lock = False
+
+
+# Network operations thread function
+def network_thread():
+    """Thread function for handling network operations"""
+    global thread_running, last_health_status, last_prediction_status
+    
+    print("Network thread started")
+    
+    while thread_running:
+        try:
+            # Health check ping
+            print("--- Thread: Health Check ---")
+            health_status = ping_health_endpoint()
+            if health_status:
+                print("✓ Thread: Backend health OK")
+            else:
+                print("✗ Thread: Backend health FAILED")
+            
+            # Wait a bit before prediction request
+            utime.sleep(2)
+            
+            # Prediction request (only if we have MPU data)
+            print("--- Thread: Prediction Request ---")
+            if mpu_enabled and 'mpu_data' in globals() and mpu_data:
+                # Get current satellite and GPS data
+                best_satellite = get_highest_snr_satellite()
+                
+                if best_satellite and gps_data['fix_status'] == "Active":
+                    try:
+                        # Prepare payload for GPRS POST
+                        raw_lat = float(gps_data['latitude'].replace('°', ''))
+                        raw_lon = float(gps_data['longitude'].replace('°', ''))
+                        raw_alt = float(gps_data['altitude'].replace(' m', ''))
+                        
+                        payload = {
+                            "vehicle_id": VEHICLE_ID,
+                            "device_id": DEVICE_ID,
+                            "Cn0DbHz": best_satellite['snr'],
+                            "Svid": int(best_satellite['svid']),
+                            "SvElevationDegrees": best_satellite['elevation'],
+                            "SvAzimuthDegrees": best_satellite['azimuth'],
+                            "IMU_MessageType": "UncalAccel",
+                            "MeasurementX": mpu_data["accel"][0],
+                            "MeasurementY": mpu_data["accel"][1],
+                            "MeasurementZ": mpu_data["accel"][2],
+                            "BiasX": 0.0,
+                            "BiasY": 0.0,
+                            "BiasZ": 0.0,
+                            "raw_latitude": raw_lat,
+                            "raw_longitude": raw_lon,
+                            "raw_altitude": raw_alt,
+                            "timestamp": utime.time()
+                        }
+                        
+                        # Make GPRS POST request
+                        success = gsm_http_post_gprs(PREDICT_URL, payload)
+                        
+                        if success:
+                            print("✓ Thread: GPRS POST prediction successful")
+                            last_prediction_status = "OK"
+                        else:
+                            print("✗ Thread: GPRS POST prediction failed")
+                            last_prediction_status = "GPRS Error"
+                    
+                    except Exception as e:
+                        print(f"Thread: Error preparing GPRS payload: {e}")
+                        last_prediction_status = "Payload Error"
+                else:
+                    print("⚠ Thread: Skipping prediction - no satellite or GPS fix")
+                    last_prediction_status = "No GPS/Sat"
+            else:
+                print("⚠ Thread: Skipping prediction - no MPU data")
+                last_prediction_status = "No MPU"
+            
+            print("--- Thread: End Operations ---")
+            
+            # Sleep for the refresh interval
+            utime.sleep(REFRESH_INTERVAL)
+            
+        except Exception as e:
+            print(f"Network thread error: {e}")
+            utime.sleep(5)  # Wait before retrying
+    
+    print("Network thread stopped")
 
 
 # LCD part ni
@@ -487,6 +675,9 @@ def scan_keypad():
         row.value(0)
     return None
 
+# Initialize global variable for MPU data
+mpu_data = None
+
 # here's the initialization
 print("System Running...")
 current_status="STANDBY"
@@ -502,15 +693,23 @@ if gsm_enabled:
         print("GPRS connection failed")
 
 print("Initialization complete!")
+
+# Start network thread
+if gsm_initialized:
+    print("Starting network thread...")
+    _thread.start_new_thread(network_thread, ())
+    print("Network thread started successfully")
+else:
+    print("GSM not initialized - network thread not started")
+
 show_message("Bus Online","Monitoring...")
 
 # this is the main loop
 loop_count=0
-http_timer=0
 
 while True:
     loop_count += 1
-    print("\nLoop", loop_count,)
+    print(f"\nMain Loop {loop_count}")
     
     # Keypad input
     key = scan_keypad()
@@ -521,11 +720,17 @@ while True:
         elif key == '4': current_status = "INACTIVE"
         elif key == '5': current_status = "HELP REQUESTED"
         elif key == '#': display_system_status()
-        else: current_status = "INVALID"
+        elif key == '*': 
+            # Toggle thread
+            thread_running = not thread_running
+            print(f"Network thread {'enabled' if thread_running else 'disabled'}")
+        else: 
+            current_status = "INVALID"
+        
         show_message("STATUS:", current_status)
         print("Key pressed:", key, "| Bus Status:", current_status)
     
-    # GPS data
+    # GPS data processing (kept in main thread as requested)
     if gps_enabled and gps.any():
         try:
             sentence = gps.readline().decode('ascii').strip()
@@ -537,39 +742,29 @@ while True:
         except Exception as e:
             print("GPS Error:", e)
     
-    # MPU6050
+    # MPU6050 reading (main thread)
     if mpu_enabled:
-        mpu_data = read_mpu()
-        if mpu_data:
-            print("Accel (g):", mpu_data["accel"])
-            print("Gyro (°/s):", mpu_data["gyro"])
-            print("Temp (C):", round(mpu_data["temp"], 2))
-        else:
-            print("MPU: Failed to read data")
+        try:
+            mpu_data = read_mpu()
+            if mpu_data:
+                print("Accel (g):", [round(x, 3) for x in mpu_data["accel"]])
+                print("Gyro (°/s):", [round(x, 2) for x in mpu_data["gyro"]])
+                print("Temp (C):", round(mpu_data["temp"], 2))
+            else:
+                print("MPU: Failed to read data")
+        except Exception as e:
+            print(f"MPU Error: {e}")
+            mpu_data = None
     else:
         print("MPU: Not detected")
-
-    # Health check ping
-    print("--- Health Check ---")
-    health_status = ping_health_endpoint()
-    if health_status:
-        print("✓ Backend health: OK")
-    else:
-        print("✗ Backend health: FAILED")
-    print("--- End Health Check ---")
-
-    # Prediction request
-    print("--- Prediction Request ---")
-    if mpu_enabled and mpu_data:
-        prediction_status = make_prediction_request(mpu_data)
-        if prediction_status:
-            print("✓ Prediction request: OK")
-        else:
-            print("✗ Prediction request: FAILED")
-    else:
-        print("⚠ Prediction skipped: No MPU data")
-    print("--- End Prediction ---")
-
-    # Sleep for 7.5 seconds
-    print(f"Waiting {REFRESH_INTERVAL} seconds...")
-    time.sleep(REFRESH_INTERVAL)
+    
+    # Display current status summary
+    print(f"Status Summary - GSM: {'OK' if gsm_enabled else 'NO'}, " +
+          f"GPS: {gps_data['fix_status']}, " +
+          f"MPU: {'OK' if mpu_data else 'NO'}, " +
+          f"Thread: {'Running' if thread_running else 'Stopped'}")
+    
+    print(f"Network Status - Health: {last_health_status}, Prediction: {last_prediction_status}")
+    
+    # Main loop runs faster than network operations
+    time.sleep(2)  # 2 second main loop cycle
