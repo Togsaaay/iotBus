@@ -780,7 +780,7 @@ show_message("Bus Online","Initializing...")
 
 if gsm_enabled:
     gsm_status()
-    if gsm_gprs_connect("internet","",""):
+    if gsm_gprs_connect("Internet","",""):
         gsm_initialized=True
         print("GPRS Connected.")
     else:
@@ -814,7 +814,7 @@ try:
 except Exception as e:
     print("Failed to start LCD display thread:", e)
 
-# -------------------- Main Loop (UI Thread) --------------------
+# Main Loop
 loop_count = 0
 
 while True:
@@ -836,7 +836,7 @@ while True:
                 try:
                     payload = create_dynamic_payload()
                     json_data = json.dumps(payload)
-                    success = gsm_http_post("http://60ee3ba2f17650722b29736f77460b16.serveo.net/predict", 
+                    success = gsm_http_post("http://6f9599184ef079246c3865989582b880.serveo.net", 
                                           json_data, use_ssl=False)
                     show_message("MANUAL POST", 
                                 "Success" if success else "Failed",
