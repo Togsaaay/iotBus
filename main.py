@@ -305,7 +305,7 @@ def make_prediction_request(mpu_data):
 
 # LCD part ni
 I2C_ADDR = 0x27
-i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
+i2c_lcd = I2C(0, scl=Pin(5), sda=Pin(19), freq=400000)
 lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
 
 
@@ -323,7 +323,7 @@ def show_message(line1="", line2="", line3="", line4=""):
 
 # GPS
 try:
-    gps = UART(1, baudrate=9600, tx=17, rx=16)
+    gps = UART(1, baudrate=9600, tx=17, rx=18)
     gps_enabled = True
     print("GPS: Initialized")
 except:
