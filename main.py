@@ -29,19 +29,19 @@ except ImportError:
 
 # Health check and prediction configuration
 HEALTH_URL = "https://ridealert-backend-production.up.railway.app/health"
-PREDICT_URL = "https://ridealert-backend-production.up.railway.app/predict"
+PREDICT_URL = " https://f6c4fe06ca00a18b36e30a281cf6f397.serveo.net"
 REFRESH_INTERVAL = 7.5  # seconds
 
 
-VEHICLE_ID = "BUS_001"  # Static vehicle identifier
-DEVICE_ID = "ESP32_GPS_IMU_001"  # Static device identifier
+VEHICLE_ID = "Janith"  # Static vehicle identifier
+DEVICE_ID = "Janith ni nag test"  # Static device identifier
 
 
 
 # WiFi credentials 
 # NEED TO CHANGE/DELETE THIS AND REPLACE WITH GSM CODE
-WIFI_SSID = "WIFI_NAME_HERE"  
-WIFI_PASSWORD = "PASSWORD_HERE"  
+WIFI_SSID = "JFADeco_AD5C"  
+WIFI_PASSWORD = "1234567890"  
 # Status tracking
 wifi_connected = False
 last_health_status = "Unknown"
@@ -485,35 +485,6 @@ except:
     gsm_enabled = False
     print("GSM: Not detected")
 
-# === GSM Functions ===
-
-
-def send_gsm_command(cmd, wait_ms=500):
-    """Send AT command and read response."""
-    if not gsm_enabled:
-        return "GSM not initialized"
-    gsm.write((cmd + "\r\n").encode())
-    utime.sleep_ms(wait_ms)
-    resp = gsm.read()
-    if resp:
-        return resp.decode(errors="ignore").strip()
-    return ""
-
-
-def gsm_status():
-    if not gsm_enabled:
-        print("GSM: Not detected")
-        return
-
-    for cmd in ["AT", "AT+CPIN?", "AT+CREG?", "AT+CSQ"]:
-        gsm.write((cmd + "\r\n").encode())
-        utime.sleep_ms(500)
-        resp = gsm.read()
-        print(f"Command: {cmd}")
-        print("Response:", resp.decode(errors="ignore")
-              if resp else "No response")
-
-
 # MPU
 MPU_ADDR = 0x68
 i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
@@ -628,21 +599,20 @@ while True:
     print("Bus Status:", current_status)
 
     # GPS
+    # GPS speed only
     if gps_enabled and gps.any():
         try:
             sentence = gps.readline().decode('ascii').strip()
             parse_nmea(sentence)
             if gps_data['fix_status'] == "Active":
-                display_gps_data()
+                current_speed = gps_data['speed']
+                print(f"Current Speed (GPS): {current_speed}")
             else:
                 print("Searching for satellites...", end='\r')
         except Exception as e:
             print("GPS error:", e)
     else:
         print("GPS: No data")
-
-    # GSM
-    gsm_status()
 
     # MPU
     mpu_data = None
