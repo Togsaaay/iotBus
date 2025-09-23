@@ -1,6 +1,6 @@
 from machine import UART, Pin, I2C
 import time
-import struct
+import struct, _thread
 import utime
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
@@ -28,8 +28,8 @@ except ImportError:
         print("HTTP/WiFi modules not available")
 
 # Health check and prediction configuration
-HEALTH_URL = "https://ridealert-backend-production.up.railway.app/health"
-PREDICT_URL = " https://f6c4fe06ca00a18b36e30a281cf6f397.serveo.net"
+HEALTH_URL = "https://ridealert-backend.onrender.com/health"
+PREDICT_URL = "https://ridealert-backend.onrender.com/predict"
 REFRESH_INTERVAL = 7.5  # seconds
 
 
@@ -39,9 +39,9 @@ DEVICE_ID = "Janith ni nag test"  # Static device identifier
 
 
 # WiFi credentials 
-# NEED TO CHANGE/DELETE THIS AND REPLACE WITH GSM CODE
-WIFI_SSID = "JFADeco_AD5C"  
-WIFI_PASSWORD = "1234567890"  
+
+WIFI_SSID = "Janith??"  
+WIFI_PASSWORD = "12345678"  
 # Status tracking
 wifi_connected = False
 last_health_status = "Unknown"
@@ -308,22 +308,21 @@ I2C_ADDR = 0x27
 i2c_lcd = I2C(0, scl=Pin(5), sda=Pin(19), freq=400000)
 lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
 
+# Thread-safe LCD lock
+lcd_lock = _thread.allocate_lock()
 
 def show_message(line1="", line2="", line3="", line4=""):
-    lcd.clear()
-    lcd.move_to(0, 0)
-    lcd.putstr(line1[:20])
-    lcd.move_to(0, 1)
-    lcd.putstr(line2[:20])
-    lcd.move_to(0, 2)
-    lcd.putstr(line3[:20])
-    lcd.move_to(0, 3)
-    lcd.putstr(line4[:20])
+    with lcd_lock:
+        lcd.clear()
+        lcd.move_to(0,0); lcd.putstr(line1[:20])
+        lcd.move_to(0,1); lcd.putstr(line2[:20])
+        lcd.move_to(0,2); lcd.putstr(line3[:20])
+        lcd.move_to(0,3); lcd.putstr(line4[:20])
 
 
 # GPS
 try:
-    gps = UART(1, baudrate=9600, tx=17, rx=18)
+    gps = UART(1, baudrate=9600, tx=18, rx=16)
     gps_enabled = True
     print("GPS: Initialized")
 except:
@@ -473,17 +472,6 @@ def display_gps_data():
     print(f"\n[Last NMEA Sentences]")
     for sentence in gps_data['raw_sentences'][-3:]:
         print(sentence)
-
-
-# GSM
-try:
-    gsm = UART(2, baudrate=9600, tx=15, rx=2)
-    gsm_enabled = True
-    print("GSM: Initialized")
-except:
-    gsm = None
-    gsm_enabled = False
-    print("GSM: Not detected")
 
 # MPU
 MPU_ADDR = 0x68
