@@ -3,8 +3,15 @@ import time
 import struct
 import utime
 import ujson
-from lcd_api import LcdApi
-from i2c_lcd import I2cLcd
+
+# Import LCD library
+try:
+    from machine_i2c_lcd import I2cLcd
+    LCD_AVAILABLE = True
+    print("LCD library available")
+except ImportError:
+    LCD_AVAILABLE = False
+    print("LCD library not available - install machine_i2c_lcd")
 
 # Import for HTTP requests and WiFi
 try:
@@ -25,42 +32,6 @@ except ImportError:
         WIFI_AVAILABLE = False
         print("HTTP/WiFi modules not available")
 
-# -------------------- LCD Setup --------------------
-I2C_ADDR = 0x27
-i2c_lcd = I2C(0, scl=Pin(5), sda=Pin(19), freq=400000)
-lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
-
-def show_message(line1="", line2="", line3="", line4=""):
-    lcd.clear()
-    lcd.move_to(0,0); lcd.putstr(line1[:20])
-    lcd.move_to(0,1); lcd.putstr(line2[:20])
-    lcd.move_to(0,2); lcd.putstr(line3[:20])
-    lcd.move_to(0,3); lcd.putstr(line4[:20])
-
-# -------------------- Keypad Setup --------------------
-row_pins = [13,12,14,27]
-col_pins = [26,25,23,32]
-rows = [Pin(pin, Pin.OUT) for pin in row_pins]
-cols = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in col_pins]
-key_map = [['1','2','3','A'],['4','5','6','B'],['7','8','9','C'],['*','0','#','D']]
-last_key = None
-last_time = 0
-
-def scan_keypad():
-    global last_key, last_time
-    for i, row in enumerate(rows):
-        row.value(1)
-        for j, col in enumerate(cols):
-            if col.value() == 1:
-                key = key_map[i][j]
-                if key != last_key or (time.ticks_ms() - last_time) > 200:
-                    last_key = key
-                    last_time = time.ticks_ms()
-                    row.value(0)
-                    return key
-        row.value(0)
-    return None
-
 # Health check and prediction configuration
 HEALTH_URL = "https://ridealert-backend.onrender.com/health"
 PREDICT_URL = "https://ridealert-backend.onrender.com/predict"
@@ -79,13 +50,134 @@ WIFI_PASSWORD = "1234567890"
 wifi_connected = False
 last_health_status = "Unknown"
 last_prediction_status = "Unknown"
-current_status = "STANDBY"
+current_bus_status = "AVAILABLE"  # Default status
+
+# LCD Configuration
+I2C_ADDR = 0x27
+lcd = None
+lcd_enabled = False
+
+if LCD_AVAILABLE:
+    try:
+        i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
+        lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
+        lcd_enabled = True
+        print("LCD: Initialized (4x20)")
+    except Exception as e:
+        lcd_enabled = False
+        print(f"LCD: Failed to initialize - {e}")
+else:
+    print("LCD: Library not available")
+
+def show_message(line1="", line2="", line3="", line4=""):
+    """Display message on LCD"""
+    if lcd_enabled:
+        try:
+            lcd.clear()
+            lcd.move_to(0, 0)
+            lcd.putstr(line1[:20])
+            lcd.move_to(0, 1)
+            lcd.putstr(line2[:20])
+            lcd.move_to(0, 2)
+            lcd.putstr(line3[:20])
+            lcd.move_to(0, 3)
+            lcd.putstr(line4[:20])
+        except Exception as e:
+            print(f"LCD display error: {e}")
+
+# Keypad Configuration
+row_pins = [13, 12, 14, 27]
+col_pins = [26, 25, 23, 32]
+rows = [Pin(pin, Pin.OUT) for pin in row_pins]
+cols = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in col_pins]
+key_map = [['1','2','3','A'],['4','5','6','B'],['7','8','9','C'],['*','0','#','D']]
+last_key = None
+last_time = 0
+DEBOUNCE_TIME = 300  # milliseconds
+
+def scan_keypad():
+    """Scan keypad for key press"""
+    global last_key, last_time
+    
+    current_time = utime.ticks_ms()
+    
+    for row_idx, row in enumerate(rows):
+        row.value(1)
+        utime.sleep_ms(1)
+        
+        for col_idx, col in enumerate(cols):
+            if col.value() == 1:
+                key = key_map[row_idx][col_idx]
+                
+                # Debounce check
+                if key != last_key or utime.ticks_diff(current_time, last_time) > DEBOUNCE_TIME:
+                    last_key = key
+                    last_time = current_time
+                    row.value(0)
+                    return key
+        
+        row.value(0)
+    
+    return None
+
+def set_status(status):
+    """Set and display bus status"""
+    global current_bus_status
+    current_bus_status = status
+    print(f"Bus Status: {status}")
+    
+    if lcd_enabled:
+        show_message(
+            "Bus Status:",
+            f"> {status}",
+            "",
+            "Press D for info"
+        )
+        time.sleep(2)  # Show status for 2 seconds
+
+def show_connection_status():
+    """Display connection status on LCD and console"""
+    print("=== CONNECTION STATUS ===")
+    print(f"WiFi: {'Connected' if wifi_connected else 'Disconnected'}")
+    print(f"Backend Health: {last_health_status}")
+    print(f"Prediction: {last_prediction_status}")
+    print(f"Bus Status: {current_bus_status}")
+    print("========================")
+    
+    if lcd_enabled:
+        show_message(
+            f"WiFi: {'OK' if wifi_connected else 'FAIL'}",
+            f"Health: {last_health_status[:15]}",
+            f"Predict: {last_prediction_status[:15]}",
+            f"Status: {current_bus_status[:13]}"
+        )
+        time.sleep(3)  # Show for 3 seconds
+
+def handle_keypad_input(key):
+    """Handle keypad key press"""
+    if key == '1':
+        set_status("FULL")
+    elif key == '2':
+        set_status("AVAILABLE")
+    elif key == 'A':
+        set_status("STANDING")
+    elif key == '4':
+        set_status("INACTIVE")
+    elif key == '5':
+        set_status("HELP REQUESTED")
+    elif key == 'D':
+        show_connection_status()
+    else:
+        print(f"Key pressed: {key}")
+        set_status("INVALID")
+
 
 def connect_wifi():
     """Connect to WiFi network"""
+    global wifi_connected
+    
     if not WIFI_AVAILABLE:
         print("WiFi not available")
-        show_message("WiFi Error", "Not available")
         return False
 
     try:
@@ -95,11 +187,13 @@ def connect_wifi():
         if wlan.isconnected():
             print("Already connected to WiFi")
             print(f"IP: {wlan.ifconfig()[0]}")
-            show_message("WiFi Connected", f"IP: {wlan.ifconfig()[0][:15]}")
+            wifi_connected = True
             return True
 
         print(f"Connecting to WiFi: {WIFI_SSID}")
-        show_message("Connecting WiFi", WIFI_SSID)
+        if lcd_enabled:
+            show_message("Connecting to WiFi", WIFI_SSID, "Please wait...", "")
+        
         wlan.connect(WIFI_SSID, WIFI_PASSWORD)
 
         # Wait for connection
@@ -107,21 +201,27 @@ def connect_wifi():
         while timeout > 0:
             if wlan.isconnected():
                 print(f"WiFi connected! IP: {wlan.ifconfig()[0]}")
-                show_message("WiFi Connected", f"IP: {wlan.ifconfig()[0][:15]}")
-                time.sleep(1)
+                wifi_connected = True
+                if lcd_enabled:
+                    show_message("WiFi Connected!", f"IP: {wlan.ifconfig()[0][:20]}", "", "")
+                    time.sleep(2)
                 return True
             time.sleep(1)
             timeout -= 1
             print(".", end="")
 
         print("\nWiFi connection failed")
-        show_message("WiFi Failed", "Check credentials")
+        wifi_connected = False
+        if lcd_enabled:
+            show_message("WiFi Failed!", "Check credentials", "", "")
+            time.sleep(2)
         return False
 
     except Exception as e:
         print(f"WiFi connection error: {e}")
-        show_message("WiFi Error", str(e)[:20])
+        wifi_connected = False
         return False
+
 
 def ping_health_endpoint():
     """Make a proper GET request to the health endpoint"""
@@ -172,6 +272,7 @@ def ping_health_endpoint():
         print(f"Health check error: {e}")
         return False
 
+
 def send_prediction_data(prediction_payload):
     """Send prediction data to the predict endpoint"""
     global last_prediction_status
@@ -194,6 +295,10 @@ def send_prediction_data(prediction_payload):
             'Accept': 'application/json'
         }
         
+        # Add bus status to payload
+        prediction_payload['bus_status'] = current_bus_status
+        
+        # Convert payload to JSON string
         json_data = ujson.dumps(prediction_payload)
         print(f"Payload: {json_data}")
         
@@ -225,6 +330,7 @@ def send_prediction_data(prediction_payload):
         print(f"Prediction error: {e}")
         last_prediction_status = f"Error: {str(e)}"
         return False
+
 
 # GPS
 try:
@@ -260,11 +366,13 @@ gps_data = {
     'raw_speed_kmh': 0.0
 }
 
+
 def safe_convert(value, converter, default):
     try:
         return converter(value) if value else default
     except:
         return default
+
 
 def convert_coord(coord, direction):
     try:
@@ -278,6 +386,7 @@ def convert_coord(coord, direction):
     except:
         return 0.0, "0.0°"
 
+
 def parse_nmea(sentence):
     if not sentence.startswith('$'):
         return
@@ -289,6 +398,7 @@ def parse_nmea(sentence):
         gps_data['message_type'] = 'GPGGA'
         gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}" if len(parts[1]) >= 6 else ''
         
+        # Store both raw and formatted coordinates
         if parts[2]:
             raw_lat, formatted_lat = convert_coord(parts[2], parts[3])
             gps_data['latitude'] = formatted_lat
@@ -303,6 +413,7 @@ def parse_nmea(sentence):
         gps_data['satellites'] = parts[7]
         gps_data['hdop'] = parts[8]
         
+        # Store raw altitude
         altitude_raw = safe_convert(parts[9], float, 0.0)
         gps_data['altitude'] = f"{altitude_raw:.1f} m"
         gps_data['raw_altitude'] = altitude_raw
@@ -316,6 +427,7 @@ def parse_nmea(sentence):
         if len(parts[9]) >= 6:
             gps_data['date'] = f"20{parts[9][4:6]}-{parts[9][2:4]}-{parts[9][0:2]}"
         
+        # Store both formatted and raw speed
         speed_knots = safe_convert(parts[7], float, 0.0)
         speed_kmh = speed_knots * 1.852
         gps_data['speed'] = f"{speed_kmh:.1f} km/h"
@@ -324,6 +436,7 @@ def parse_nmea(sentence):
         gps_data['course'] = f"{safe_convert(parts[8], float, 0.0):.1f}°"
 
     gps_data['raw_sentences'].append(sentence)
+
 
 def display_gps_data():
     print("GPS Info")
@@ -337,23 +450,28 @@ def display_gps_data():
     print(f"Status: {gps_data['fix_status']}")
     print(f"Satellites: {gps_data['satellites']}")
 
+
 # MPU
 MPU_ADDR = 0x68
 i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
 devices = i2c_bus.scan()
 mpu_enabled = MPU_ADDR in devices
 
+
 def mpu_write(reg, data):
     i2c_bus.writeto_mem(MPU_ADDR, reg, bytes([data]))
 
+
 def mpu_read(reg, n=1):
     return i2c_bus.readfrom_mem(MPU_ADDR, reg, n)
+
 
 if mpu_enabled:
     mpu_write(0x6B, 0)
     print("MPU6050: Initialized")
 else:
     print("MPU6050: Not detected")
+
 
 def read_mpu():
     data = mpu_read(0x3B, 14)
@@ -368,15 +486,19 @@ def read_mpu():
     gyro_z /= 131.0
     return {"accel": (accel_x, accel_y, accel_z), "gyro": (gyro_x, gyro_y, gyro_z), "temp": temp_c}
 
+
 def create_prediction_payload(mpu_data=None):
     """Create prediction payload based on current sensor data"""
     
+    # Get current MPU data if not provided
     if mpu_data is None and mpu_enabled:
         mpu_data = read_mpu()
     
+    # Use default values if sensors are not available
     if not mpu_data:
         mpu_data = {"accel": (0.0, 0.0, 0.0), "gyro": (0.0, 0.0, 0.0), "temp": 0.0}
     
+    # Create payload matching your backend PredictionRequest model
     payload = {
         "device_id": DEVICE_ID,
         "fleet_id": FLEET_ID,
@@ -396,9 +518,18 @@ def create_prediction_payload(mpu_data=None):
     
     return payload
 
+
 # Main Loop
 print("\nSystem Running...")
-show_message("Bus Online", "Initializing...")
+
+if lcd_enabled:
+    show_message(
+        "IoT Bus System",
+        "Initializing...",
+        "",
+        "Please wait"
+    )
+    time.sleep(2)
 
 if HTTP_AVAILABLE and WIFI_AVAILABLE:
     print("Initializing WiFi for health checks...")
@@ -406,30 +537,23 @@ if HTTP_AVAILABLE and WIFI_AVAILABLE:
 else:
     wifi_connected = False
     print("WiFi not available - health checks disabled")
-    show_message("WiFi Error", "Not available")
 
-show_message("Bus Online", "Monitoring...", f"Status: {current_status}")
+if lcd_enabled:
+    show_message(
+        "System Ready",
+        f"Status: {current_bus_status}",
+        "",
+        "Press keys to start"
+    )
+    time.sleep(2)
 
-loop_count = 0
-last_refresh = time.time()
+loop_counter = 0
 
 while True:
-    loop_count += 1
-    current_time = time.time()
-    
-    # Keypad input
+    # Check for keypad input
     key = scan_keypad()
     if key:
-        if key == '1': current_status = "FULL"
-        elif key == '2': current_status = "AVAILABLE"
-        elif key == 'A': current_status = "STANDING"
-        elif key == '4': current_status = "INACTIVE"
-        elif key == '5': current_status = "HELP REQUESTED"
-        else: current_status = "INVALID"
-        
-        show_message("STATUS:", current_status, f"Health: {last_health_status}", f"Predict: {last_prediction_status}")
-        print("Key pressed:", key, "| Bus Status:", current_status)
-        time.sleep(1)
+        handle_keypad_input(key)
     
     # GPS
     if gps_enabled and gps.any():
@@ -458,41 +582,41 @@ while True:
     else:
         print("MPU: Not detected")
 
-    # Periodic health check and prediction
-    if current_time - last_refresh >= REFRESH_INTERVAL:
-        # Health check
-        print("--- Health Check ---")
-        show_message("Checking Health", "Please wait...")
-        health_status = ping_health_endpoint()
-        if health_status:
-            print("✓ Backend health: OK")
+    # Health check
+    print("--- Health Check ---")
+    health_status = ping_health_endpoint()
+    if health_status:
+        print("✓ Backend health: OK")
+    else:
+        print("✗ Backend health: FAILED")
+    print("--- End Health Check ---")
+    
+    # Send prediction data
+    print("--- Sending Prediction Data ---")
+    try:
+        prediction_payload = create_prediction_payload(mpu_data)
+        prediction_success = send_prediction_data(prediction_payload)
+        if prediction_success:
+            print("✓ Prediction data sent successfully")
         else:
-            print("✗ Backend health: FAILED")
-        print("--- End Health Check ---")
-        
-        # Send prediction data
-        print("--- Sending Prediction Data ---")
-        show_message("Sending Data", "Please wait...")
-        try:
-            prediction_payload = create_prediction_payload(mpu_data)
-            prediction_success = send_prediction_data(prediction_payload)
-            if prediction_success:
-                print("✓ Prediction data sent successfully")
-            else:
-                print("✗ Failed to send prediction data")
-        except Exception as e:
-            print(f"✗ Prediction error: {e}")
-        print("--- End Prediction ---")
-        
-        # Update display with status
-        show_message("Bus Online", 
-                    f"Status: {current_status[:12]}", 
-                    f"Health: {last_health_status[:12]}", 
-                    f"Pred: {last_prediction_status[:12]}")
-        
-        last_refresh = current_time
+            print("✗ Failed to send prediction data")
+    except Exception as e:
+        print(f"✗ Prediction error: {e}")
+    print("--- End Prediction ---")
     
     # Status summary
-    print(f"Loop {loop_count} | Status: {current_status} | Health: {last_health_status}, Prediction: {last_prediction_status}")
+    print(f"Status - Health: {last_health_status}, Prediction: {last_prediction_status}")
     
-    time.sleep(1)
+    # Update LCD with current status periodically
+    loop_counter += 1
+    if lcd_enabled and loop_counter % 5 == 0:  # Update LCD every 5 cycles
+        show_message(
+            f"Status: {current_bus_status[:15]}",
+            f"WiFi: {'OK' if wifi_connected else 'FAIL'}",
+            f"Speed: {gps_data.get('speed', 'N/A')[:15]}",
+            "Press D for info"
+        )
+
+    # Sleep
+    print(f"Waiting {REFRESH_INTERVAL} seconds...")
+    time.sleep(REFRESH_INTERVAL)
