@@ -1,761 +1,504 @@
-# from machine import UART, Pin, I2C
-# import time, struct, utime, _thread
-# from lcd_api import LcdApi
-# from i2c_lcd import I2cLcd
+from machine import UART, Pin, I2C
+import time
+import struct
+import utime
+import ujson
+import _thread
+from lcd_api import LcdApi
+from i2c_lcd import I2cLcd
 
-# # -------------------- LCD Setup --------------------
-# I2C_ADDR = 0x27
-# i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
-# lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
+# -------------------- LCD Setup --------------------
+I2C_ADDR = 0x27
+i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
+lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
 
-# # Thread-safe LCD lock
-# lcd_lock = _thread.allocate_lock()
+# Thread-safe LCD lock
+lcd_lock = _thread.allocate_lock()
 
-# def show_message(line1="", line2="", line3="", line4=""):
-#     with lcd_lock:
-#         lcd.clear()
-#         lcd.move_to(0,0); lcd.putstr(line1[:20])
-#         lcd.move_to(0,1); lcd.putstr(line2[:20])
-#         lcd.move_to(0,2); lcd.putstr(line3[:20])
-#         lcd.move_to(0,3); lcd.putstr(line4[:20])
+def show_message(line1="", line2="", line3="", line4=""):
+    with lcd_lock:
+        lcd.clear()
+        lcd.move_to(0,0); lcd.putstr(line1[:20])
+        lcd.move_to(0,1); lcd.putstr(line2[:20])
+        lcd.move_to(0,2); lcd.putstr(line3[:20])
+        lcd.move_to(0,3); lcd.putstr(line4[:20])
 
-# # -------------------- GPS Setup --------------------
-# try:
-#     gps = UART(1, baudrate=9600, tx=17, rx=16)
-#     gps_enabled = True
-#     print("GPS: Initialized")
-# except:
-#     gps = None
-#     gps_enabled = False
-#     print("GPS: Not detected")
+# -------------------- HTTP and WiFi Setup --------------------
+try:
+    import urequests as requests
+    import network
+    HTTP_AVAILABLE = True
+    WIFI_AVAILABLE = True
+    print("HTTP and WiFi modules available")
+except ImportError:
+    try:
+        import requests
+        import network
+        HTTP_AVAILABLE = True
+        WIFI_AVAILABLE = True
+        print("HTTP and WiFi modules available (standard)")
+    except ImportError:
+        HTTP_AVAILABLE = False
+        WIFI_AVAILABLE = False
+        print("HTTP/WiFi modules not available")
 
-# # Updated GPS data structure from working code
-# gps_data = {
-#     'message_type': '',
-#     'utc_time': '',
-#     'date': '',
-#     'latitude': '',
-#     'longitude': '',
-#     'altitude': '',
-#     'speed': '',
-#     'course': '',
-#     'fix_status': '',
-#     'fix_quality': '',
-#     'satellites': '',
-#     'hdop': '',
-#     'vdop': '',
-#     'pdop': '',
-#     'mode': '',
-#     'satellite_info': {},
-#     'raw_sentences': []
-# }
+# Health check and prediction configuration
+HEALTH_URL = "https://ridealert-backend.onrender.com/health"
+PREDICT_URL = "https://ridealert-backend.onrender.com/predict"
+REFRESH_INTERVAL = 7.5  # seconds
 
-# gps_lock = _thread.allocate_lock()
+# Static configuration
+VEHICLE_ID = "68b3ef0d3ed9beb95ace98fc"
+FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
+DEVICE_ID = "iot-device-001"
 
-# def safe_convert(value, converter, default):
-#     try:
-#         return converter(value) if value else default
-#     except:
-#         return default
+# WiFi credentials
+WIFI_SSID = "JFADeco_AD5C"
+WIFI_PASSWORD = "1234567890"
 
-# def convert_coord(coord, direction):
-#     try:
-#         val = float(coord)
-#         degrees = int(val/100)
-#         minutes = val - degrees*100
-#         decimal = degrees + minutes/60
-#         if direction in ['S','W']:
-#             decimal = -decimal
-#         return f"{decimal:.6f}°"
-#     except:
-#         return "0.0°"
+# Status tracking
+wifi_connected = False
+last_health_status = "Unknown"
+last_prediction_status = "Unknown"
+http_lock = _thread.allocate_lock()
 
-# # Updated parse_nmea function from working code
-# def parse_nmea(sentence):
-#     if not sentence.startswith('$'): return
-#     parts = sentence.split(',')
-#     sentence_type = parts[0][1:]
+def connect_wifi():
+    """Connect to WiFi network"""
+    if not WIFI_AVAILABLE:
+        print("WiFi not available")
+        return False
 
-#     if sentence_type == 'GPGGA':
-#         gps_data['message_type'] = 'GPGGA'
-#         gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}" if len(
-#             parts[1]) >= 6 else ''
-#         gps_data['latitude'] = convert_coord(
-#             parts[2], parts[3]) if parts[2] else '0.0'
-#         gps_data['longitude'] = convert_coord(
-#             parts[4], parts[5]) if parts[4] else '0.0'
-#         gps_data['fix_quality'] = parts[6]
-#         gps_data['satellites'] = parts[7]
-#         gps_data['altitude'] = str(round(safe_convert(parts[9], float, 0.0),1)) + " m"
-#         gps_data['fix_status'] = "Active" if parts[6] != '0' else "No Fix"
+    try:
+        wlan = network.WLAN(network.STA_IF)
+        wlan.active(True)
 
-#     elif sentence_type == 'GPRMC':
-#         gps_data['message_type'] = 'GPRMC'
-#         if len(parts[1]) >= 6:
-#             gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}"
-#         if len(parts[9]) >= 6:
-#             gps_data['date'] = f"20{parts[9][4:6]}-{parts[9][2:4]}-{parts[9][0:2]}"
-#         gps_data['speed'] = f"{safe_convert(parts[7], float, 0.0) * 1.852:.1f} km/h"
-#         gps_data['course'] = f"{safe_convert(parts[8], float, 0.0):.1f}°"
-#         gps_data['mode'] = parts[12][0] if len(parts) > 12 else ''
+        if wlan.isconnected():
+            print("Already connected to WiFi")
+            print(f"IP: {wlan.ifconfig()[0]}")
+            return True
 
-#     elif sentence_type == 'GPGSV':
-#         total_sats = safe_convert(parts[3], int, 0)
-#         gps_data['satellites'] = str(total_sats)
-#         for i in range(4):
-#             idx = 4 + i*4
-#             if len(parts) > idx + 3:
-#                 svid = parts[idx]
-#                 if svid:
-#                     gps_data['satellite_info'][svid] = {
-#                         'elevation': f"{safe_convert(parts[idx+1], int, 0)}°",
-#                         'azimuth': f"{safe_convert(parts[idx+2], int, 0)}°",
-#                         'snr': f"{safe_convert(parts[idx+3].split('*')[0], int, 0)} dBHz"
-#                     }
+        print(f"Connecting to WiFi: {WIFI_SSID}")
+        wlan.connect(WIFI_SSID, WIFI_PASSWORD)
 
-#     elif sentence_type == 'GPGSA':
-#         gps_data['mode'] = 'Auto' if parts[1] == 'A' else 'Manual'
-#         gps_data['fix_type'] = 'No fix' if parts[2] == '1' else (
-#             '2D' if parts[2] == '2' else '3D')
-#         if len(parts) > 15:
-#             gps_data['pdop'] = parts[15]
-#         if len(parts) > 16:
-#             gps_data['hdop'] = parts[16]
-#         if len(parts) > 17:
-#             gps_data['vdop'] = parts[17].split('*')[0]
+        timeout = 10
+        while timeout > 0:
+            if wlan.isconnected():
+                print(f"WiFi connected! IP: {wlan.ifconfig()[0]}")
+                show_message("WiFi Connected", f"IP: {wlan.ifconfig()[0][:16]}")
+                return True
+            time.sleep(1)
+            timeout -= 1
+            print(".", end="")
 
-#     elif sentence_type == 'GPVTG':
-#         gps_data['course'] = f"{safe_convert(parts[1], float, 0.0):.1f}°"
-#         gps_data['speed'] = f"{safe_convert(parts[7], float, 0.0):.1f} km/h"
+        print("\nWiFi connection failed")
+        show_message("WiFi Failed", "Check credentials")
+        return False
 
-#     gps_data['raw_sentences'].append(sentence)
+    except Exception as e:
+        print(f"WiFi connection error: {e}")
+        return False
 
-# def display_gps_data():
-#     with gps_lock:
-#         print("GPS Info")
+def ping_health_endpoint():
+    """Make a proper GET request to the health endpoint"""
+    global last_health_status
 
-#         print(f"\n[Time/Date]")
-#         print(f"UTC Time: {gps_data['utc_time']}")
-#         print(f"Date: {gps_data['date']}")
+    if not HTTP_AVAILABLE:
+        print("HTTP not available - skipping health check")
+        last_health_status = "No HTTP"
+        return False
 
-#         print(f"\n[Position]")
-#         print(f"Latitude: {gps_data['latitude']}")
-#         print(f"Longitude: {gps_data['longitude']}")
-#         print(f"Altitude: {gps_data['altitude']}")
+    if not connect_wifi():
+        print("No WiFi connection - skipping health check")
+        last_health_status = "No WiFi"
+        return False
 
-#         print(f"\n[Movement]")
-#         print(f"Speed: {gps_data['speed']}")
-#         print(f"Course: {gps_data['course']}")
+    try:
+        print(f"Making GET request to: {HEALTH_URL}")
+        headers = {
+            'User-Agent': 'ESP32-IoT-Bus/1.0',
+            'Accept': 'application/json'
+        }
 
-#         print(f"\n[Fix Information]")
-#         print(f"Status: {gps_data['fix_status']}")
-#         print(f"Quality: {gps_data['fix_quality']}")
-#         print(f"Mode: {gps_data['mode']}")
-#         print(f"Satellites: {gps_data['satellites']}")
+        response = requests.get(HEALTH_URL, headers=headers, timeout=10)
+        print(f"Response status: {response.status_code}")
 
-#         print(f"\n[Dilution of Precision]")
-#         print(f"HDOP: {gps_data['hdop']} (Horizontal)")
-#         print(f"VDOP: {gps_data['vdop']} (Vertical)")
-#         print(f"PDOP: {gps_data['pdop']} (Position)")
+        if response.status_code == 200:
+            print("✓ Health check successful")
+            last_health_status = "OK"
+            response.close()
+            return True
+        else:
+            print(f"✗ Health check failed with status: {response.status_code}")
+            last_health_status = f"HTTP {response.status_code}"
+            response.close()
+            return False
 
-#         if gps_data['satellite_info']:
-#             print(f"\n[Satellite Details] (SNR > 0)")
-#             print("PRN  Elevation Azimuth  SNR")
-#             for svid, info in sorted(gps_data['satellite_info'].items(), key=lambda x: int(x[0])):
-#                 if int(info['snr'].split()[0]) > 0:
-#                     print(
-#                         f"{svid:>3}  {info['elevation']:>8}  {info['azimuth']:>7}  {info['snr']}")
+    except OSError as e:
+        print(f"Network error: {e}")
+        last_health_status = "Network Error"
+        return False
+    except Exception as e:
+        print(f"Health check error: {e}")
+        return False
 
-#         print(f"\n[Last NMEA Sentences]")
-#         for sentence in gps_data['raw_sentences'][-3:]:
-#             print(sentence)
-
-# # -------------------- GSM Setup --------------------
-# try:
-#     gsm = UART(2, baudrate=9600, tx=2, rx=0)
-#     gsm_enabled = True
-#     print("GSM: Initialized")
-# except:
-#     gsm = None
-#     gsm_enabled = False
-#     print("GSM: Not detected")
-
-# # Thread-safe GSM lock
-# gsm_lock = _thread.allocate_lock()
-
-# def send_gsm_command(cmd, wait_ms=500):
-#     if not gsm_enabled: return "GSM not initialized"
-#     with gsm_lock:
-#         gsm.write((cmd+"\r\n").encode())
-#         utime.sleep_ms(wait_ms)
-#         resp = gsm.read()
-#         if resp:
-#             try: return resp.decode('utf-8').strip()
-#             except:
-#                 try: return resp.decode('ascii').strip()
-#                 except: return str(resp)
-#         return ""
-
-# def gsm_status():
-#     if not gsm_enabled: return
-#     for cmd in ["AT","AT+CPIN?","AT+CREG?","AT+CSQ","AT+CGATT?"]:
-#         resp = send_gsm_command(cmd, wait_ms=500)
-#         print(cmd, "->", resp if resp else "No response")
-
-# # -------------------- GPRS and HTTP --------------------
-# def gsm_gprs_connect(apn, user="", pwd=""):
-#     if not gsm_enabled: return False
-#     print("Setting APN:", apn)
-#     send_gsm_command("AT+CGATT=1", wait_ms=1000)
-#     send_gsm_command('AT+CSTT="{}","{}","{}"'.format(apn,user,pwd), wait_ms=1000)
-#     send_gsm_command("AT+CIICR", wait_ms=4000)
-#     ip = send_gsm_command("AT+CIFSR", wait_ms=2000)
-#     print("GPRS IP ->", ip)
+def send_prediction_data(prediction_payload):
+    """Send prediction data to the predict endpoint"""
+    global last_prediction_status
     
-#     # -------------------- SAPBR Setup --------------------
-#     send_gsm_command('AT+SAPBR=3,1,"Contype","GPRS"', wait_ms=1000)
-#     send_gsm_command('AT+SAPBR=3,1,"APN","{}"'.format(apn), wait_ms=1000)
-#     send_gsm_command('AT+SAPBR=1,1', wait_ms=3000)  # open bearer
-#     status = send_gsm_command('AT+SAPBR=2,1', wait_ms=1000)
-#     print("SAPBR Status:", status)
-    
-#     return True if ip else False
+    if not HTTP_AVAILABLE:
+        print("HTTP not available - skipping prediction")
+        last_prediction_status = "No HTTP"
+        return False
 
-# # def gsm_http_get(url, use_ssl=True):
-# #     if not gsm_enabled: 
-# #         return
-# #     print("=" * 50)
-# #     print("HTTP GET REQUEST STARTED")
-# #     print("URL:", url)
-# #     print("SSL:", "Enabled" if use_ssl else "Disabled")
-# #     print("=" * 50)
+    if not connect_wifi():
+        print("No WiFi connection - skipping prediction")
+        last_prediction_status = "No WiFi"
+        return False
 
-# #     # Cleanup before new request
-# #     cleanup_resp = send_gsm_command("AT+HTTPTERM", wait_ms=1000)
-# #     print("Cleanup response:", cleanup_resp)
-
-# #     # Init HTTP service
-# #     init_resp = send_gsm_command("AT+HTTPINIT", wait_ms=2000)
-# #     print("HTTP Init response:", init_resp)
-    
-# #     cid_resp = send_gsm_command('AT+HTTPPARA="CID",1', wait_ms=1000)
-# #     print("CID setup response:", cid_resp)
-
-# #     # Enable SSL if needed
-# #     if use_ssl:
-# #         ssl_resp = send_gsm_command('AT+HTTPSSL=1', wait_ms=1000)  # enable SSL
-# #         print("SSL enable response:", ssl_resp)
-# #     else:
-# #         ssl_resp = send_gsm_command('AT+HTTPSSL=0', wait_ms=1000)  # disable SSL
-# #         print("SSL disable response:", ssl_resp)
-
-# #     # Set URL
-# #     url_resp = send_gsm_command(f'AT+HTTPPARA="URL","{url}"', wait_ms=1000)
-# #     print("URL setup response:", url_resp)
-
-# #     # Optional: set content type (for GET it usually doesn't matter)
-# #     content_resp = send_gsm_command('AT+HTTPPARA="CONTENT","application/json"', wait_ms=1000)
-# #     print("Content-type response:", content_resp)
-
-# #     # Perform GET
-# #     print("\nPerforming HTTP GET request...")
-# #     resp = send_gsm_command("AT+HTTPACTION=0", wait_ms=15000)
-# #     print("HTTPACTION Raw Response:", resp)
-
-# #     if "+HTTPACTION:" in resp:
-# #         try:
-# #             parts = resp.split("+HTTPACTION: 0,")[1].split(",")
-# #             status_code = parts[0]
-# #             data_length = parts[1] if len(parts) > 1 else "0"
-# #             print("\n" + "=" * 30)
-# #             print("HTTP RESPONSE DETAILS:")
-# #             print("Status Code:", status_code)
-# #             print("Data Length:", data_length, "bytes")
-# #             print("=" * 30)
+    try:
+        print(f"Sending prediction data to: {PREDICT_URL}")
+        headers = {
+            'User-Agent': 'ESP32-IoT-Bus/1.0',
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
+        }
+        
+        json_data = ujson.dumps(prediction_payload)
+        print(f"Payload: {json_data}")
+        
+        response = requests.post(PREDICT_URL, data=json_data, headers=headers, timeout=15)
+        print(f"Prediction response status: {response.status_code}")
+        
+        try:
+            content = response.text
+            print(f"Prediction response: {content}")
+        except:
+            print("Could not read prediction response")
+        
+        if response.status_code == 200:
+            print("✓ Prediction data sent successfully")
+            last_prediction_status = "OK"
+            response.close()
+            return True
+        else:
+            print(f"✗ Prediction failed with status: {response.status_code}")
+            last_prediction_status = f"HTTP {response.status_code}"
+            response.close()
+            return False
             
-# #             if status_code == "200":
-# #                 print("\nReading response data...")
-# #                 read_resp = send_gsm_command("AT+HTTPREAD", wait_ms=5000)
-# #                 print("\nHTTP RESPONSE BODY:")
-# #                 print("-" * 40)
-                
-# #                 # Extract actual response content from AT command response
-# #                 if "+HTTPREAD:" in read_resp:
-# #                     try:
-# #                         # Split by +HTTPREAD: to get the actual response
-# #                         response_parts = read_resp.split("+HTTPREAD:")
-# #                         if len(response_parts) > 1:
-# #                             # Get everything after the length indicator
-# #                             actual_response = response_parts[1].split('\n', 1)
-# #                             if len(actual_response) > 1:
-# #                                 clean_response = actual_response[1].strip()
-# #                                 print("ACTUAL RESPONSE DATA:")
-# #                                 print(clean_response)
-# #                             else:
-# #                                 print("Full response after +HTTPREAD:")
-# #                                 print(response_parts[1])
-# #                         else:
-# #                             print("Raw HTTPREAD response:")
-# #                             print(read_resp)
-# #                     except Exception as parse_error:
-# #                         print("Error parsing response data:", parse_error)
-# #                         print("Raw HTTPREAD response:")
-# #                         print(read_resp)
-# #                 else:
-# #                     print("Raw HTTPREAD response (no +HTTPREAD marker found):")
-# #                     print(read_resp)
-# #                 print("-" * 40)
-# #             else:
-# #                 print("\nHTTP request failed!")
-# #                 print("Status code:", status_code)
-# #                 if status_code == "601": 
-# #                     print("Error 601: Network error - check GPRS/SIM/APN settings")
-# #                 elif status_code == "603":
-# #                     print("Error 603: SSL handshake failed (certificate or TLS version issue)")
-# #                 elif status_code == "404":
-# #                     print("Error 404: URL not found")
-# #                 elif status_code == "500":
-# #                     print("Error 500: Internal server error")
-# #                 else:
-# #                     print("Unknown error code. Check network connectivity.")
-# #         except Exception as e:
-# #             print("Error parsing HTTPACTION response:", e)
-# #             print("Raw response was:", resp)
-# #     else:
-# #         print("No +HTTPACTION response received!")
-# #         print("Raw response:", resp)
+    except OSError as e:
+        print(f"Network error during prediction: {e}")
+        last_prediction_status = "Network Error"
+        return False
+    except Exception as e:
+        print(f"Prediction error: {e}")
+        last_prediction_status = f"Error: {str(e)}"
+        return False
 
-# #     # Terminate HTTP
-# #     term_resp = send_gsm_command("AT+HTTPTERM", wait_ms=1000)
-# #     print("HTTP terminate response:", term_resp)
-# #     print("=" * 50)
-# #     print("HTTP GET REQUEST COMPLETED")
-# #     print("=" * 50)
+# -------------------- GPS Setup --------------------
+try:
+    gps = UART(1, baudrate=9600, tx=18, rx=16)
+    gps_enabled = True
+    print("GPS: Initialized")
+except:
+    gps = None
+    gps_enabled = False
+    print("GPS: Not detected")
 
-# def gsm_http_post(url, json_data, use_ssl=False):
-#     if not gsm_enabled: 
-#         return
-#     print("=" * 50)
-#     print("HTTP POST REQUEST STARTED")
-#     print("URL:", url)
-#     print("SSL:", "Enabled" if use_ssl else "Disabled")
-#     print("Data Length:", len(json_data), "bytes")
-#     print("=" * 50)
+gps_data = {
+    'message_type': '',
+    'utc_time': '',
+    'date': '',
+    'latitude': '',
+    'longitude': '',
+    'altitude': '',
+    'speed': '',
+    'course': '',
+    'fix_status': '',
+    'fix_quality': '',
+    'satellites': '',
+    'hdop': '',
+    'vdop': '',
+    'pdop': '',
+    'mode': '',
+    'satellite_info': {},
+    'raw_sentences': [],
+    'raw_latitude': 0.0,
+    'raw_longitude': 0.0,
+    'raw_altitude': 0.0,
+    'raw_speed_kmh': 0.0
+}
+gps_lock = _thread.allocate_lock()
 
-#     # Cleanup before new request
-#     cleanup_resp = send_gsm_command("AT+HTTPTERM", wait_ms=1000)
-#     print("Cleanup response:", cleanup_resp)
+def safe_convert(value, converter, default):
+    try:
+        return converter(value) if value else default
+    except:
+        return default
 
-#     # Init HTTP service
-#     init_resp = send_gsm_command("AT+HTTPINIT", wait_ms=2000)
-#     print("HTTP Init response:", init_resp)
-    
-#     cid_resp = send_gsm_command('AT+HTTPPARA="CID",1', wait_ms=1000)
-#     print("CID setup response:", cid_resp)
+def convert_coord(coord, direction):
+    try:
+        val = float(coord)
+        degrees = int(val / 100)
+        minutes = val - degrees * 100
+        decimal = degrees + minutes / 60
+        if direction in ['S', 'W']:
+            decimal = -decimal
+        return decimal, f"{decimal:.6f}°"
+    except:
+        return 0.0, "0.0°"
 
-#     # Enable/Disable SSL
-#     if use_ssl:
-#         ssl_resp = send_gsm_command('AT+HTTPSSL=1', wait_ms=1000)
-#         print("SSL enable response:", ssl_resp)
-#     else:
-#         ssl_resp = send_gsm_command('AT+HTTPSSL=0', wait_ms=1000)
-#         print("SSL disable response:", ssl_resp)
+def parse_nmea(sentence):
+    if not sentence.startswith('$'):
+        return
 
-#     # Set URL
-#     url_resp = send_gsm_command(f'AT+HTTPPARA="URL","{url}"', wait_ms=1000)
-#     print("URL setup response:", url_resp)
+    parts = sentence.split(',')
+    sentence_type = parts[0][1:]
 
-#     # Set content type for JSON
-#     content_resp = send_gsm_command('AT+HTTPPARA="CONTENT","application/json"', wait_ms=1000)
-#     print("Content-type response:", content_resp)
-
-#     # Set data to be posted
-#     print(f"\nSetting up POST data ({len(json_data)} bytes)...")
-#     data_cmd = f'AT+HTTPDATA={len(json_data)},10000'
-#     data_setup_resp = send_gsm_command(data_cmd, wait_ms=1000)
-#     print("Data setup response:", data_setup_resp)
-
-#     # Send the actual JSON data
-#     if "DOWNLOAD" in data_setup_resp:
-#         print("Sending JSON payload...")
-#         print("JSON Data:", json_data)
-#         with gsm_lock:
-#             gsm.write(json_data.encode())
-#             utime.sleep_ms(2000)  # Wait for data to be sent
-#             data_resp = gsm.read()
-#             if data_resp:
-#                 try:
-#                     data_response = data_resp.decode('utf-8').strip()
-#                     print("Data send response:", data_response)
-#                 except:
-#                     print("Data send response (raw):", data_resp)
-
-#     # Perform POST (action=1 for POST)
-#     print("\nPerforming HTTP POST request...")
-#     resp = send_gsm_command("AT+HTTPACTION=1", wait_ms=20000)  # Longer timeout for POST
-#     print("HTTPACTION Raw Response:", resp)
-
-#     if "+HTTPACTION:" in resp:
-#         try:
-#             parts = resp.split("+HTTPACTION: 1,")[1].split(",")
-#             status_code = parts[0]
-#             data_length = parts[1] if len(parts) > 1 else "0"
-#             print("\n" + "=" * 30)
-#             print("HTTP POST RESPONSE DETAILS:")
-#             print("Status Code:", status_code)
-#             print("Data Length:", data_length, "bytes")
-#             print("=" * 30)
+    if sentence_type == 'GPGGA':
+        with gps_lock:
+            gps_data['message_type'] = 'GPGGA'
+            gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}" if len(parts[1]) >= 6 else ''
             
-#             if status_code == "200":
-#                 print("\nReading response data...")
-#                 read_resp = send_gsm_command("AT+HTTPREAD", wait_ms=5000)
-#                 print("\nHTTP RESPONSE BODY:")
-#                 print("-" * 40)
-                
-#                 # Extract actual response content
-#                 if "+HTTPREAD:" in read_resp:
-#                     try:
-#                         response_parts = read_resp.split("+HTTPREAD:")
-#                         if len(response_parts) > 1:
-#                             actual_response = response_parts[1].split('\n', 1)
-#                             if len(actual_response) > 1:
-#                                 clean_response = actual_response[1].strip()
-#                                 print("ACTUAL RESPONSE DATA:")
-#                                 print(clean_response)
-#                             else:
-#                                 print("Full response after +HTTPREAD:")
-#                                 print(response_parts[1])
-#                         else:
-#                             print("Raw HTTPREAD response:")
-#                             print(read_resp)
-#                     except Exception as parse_error:
-#                         print("Error parsing response data:", parse_error)
-#                         print("Raw HTTPREAD response:")
-#                         print(read_resp)
-#                 else:
-#                     print("Raw HTTPREAD response (no +HTTPREAD marker found):")
-#                     print(read_resp)
-#                 print("-" * 40)
-#             else:
-#                 print("\nHTTP POST request failed!")
-#                 print("Status code:", status_code)
-#                 if status_code == "601": 
-#                     print("Error 601: Network error - check GPRS/SIM/APN settings")
-#                 elif status_code == "603":
-#                     print("Error 603: SSL handshake failed - trying without SSL next time")
-#                 elif status_code == "404":
-#                     print("Error 404: URL not found")
-#                 elif status_code == "500":
-#                     print("Error 500: Internal server error")
-#                 else:
-#                     print("Unknown error code. Check network connectivity.")
-#         except Exception as e:
-#             print("Error parsing HTTPACTION response:", e)
-#             print("Raw response was:", resp)
-#     else:
-#         print("No +HTTPACTION response received!")
-#         print("Raw response:", resp)
-#         # Terminate HTTP
-#     term_resp = send_gsm_command("AT+HTTPTERM", wait_ms=1000)
-#     print("HTTP terminate response:", term_resp)
-#     print("=" * 50)
-#     print("HTTP POST REQUEST COMPLETED")
-#     print("=" * 50)
+            if parts[2]:
+                raw_lat, formatted_lat = convert_coord(parts[2], parts[3])
+                gps_data['latitude'] = formatted_lat
+                gps_data['raw_latitude'] = raw_lat
+            
+            if parts[4]:
+                raw_lon, formatted_lon = convert_coord(parts[4], parts[5])
+                gps_data['longitude'] = formatted_lon
+                gps_data['raw_longitude'] = raw_lon
+            
+            gps_data['fix_quality'] = parts[6]
+            gps_data['satellites'] = parts[7]
+            gps_data['hdop'] = parts[8]
+            
+            altitude_raw = safe_convert(parts[9], float, 0.0)
+            gps_data['altitude'] = f"{altitude_raw:.1f} m"
+            gps_data['raw_altitude'] = altitude_raw
+            
+            gps_data['fix_status'] = "Active" if parts[6] != '0' else "No Fix"
 
-# # -------------------- MPU6050 Setup --------------------
-# MPU_ADDR = 0x68
-# i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
-# mpu_enabled = MPU_ADDR in i2c_bus.scan()
-# mpu_lock = _thread.allocate_lock()
+    elif sentence_type == 'GPRMC':
+        with gps_lock:
+            gps_data['message_type'] = 'GPRMC'
+            if len(parts[1]) >= 6:
+                gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}"
+            if len(parts[9]) >= 6:
+                gps_data['date'] = f"20{parts[9][4:6]}-{parts[9][2:4]}-{parts[9][0:2]}"
+            
+            speed_knots = safe_convert(parts[7], float, 0.0)
+            speed_kmh = speed_knots * 1.852
+            gps_data['speed'] = f"{speed_kmh:.1f} km/h"
+            gps_data['raw_speed_kmh'] = speed_kmh
+            
+            gps_data['course'] = f"{safe_convert(parts[8], float, 0.0):.1f}°"
 
-# def mpu_write(reg,data): 
-#     with mpu_lock:
-#         i2c_bus.writeto_mem(MPU_ADDR, reg, bytes([data]))
+    with gps_lock:
+        gps_data['raw_sentences'].append(sentence)
+
+def display_gps_data():
+    with gps_lock:
+        print("GPS Info")
+        print(f"UTC Time: {gps_data['utc_time']}")
+        print(f"Date: {gps_data['date']}")
+        print(f"Latitude: {gps_data['latitude']}")
+        print(f"Longitude: {gps_data['longitude']}")
+        print(f"Altitude: {gps_data['altitude']}")
+        print(f"Speed: {gps_data['speed']}")
+        print(f"Satellites: {gps_data['satellites']}")
+
+# -------------------- MPU6050 Setup --------------------
+MPU_ADDR = 0x68
+i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
+devices = i2c_bus.scan()
+mpu_enabled = MPU_ADDR in devices
+mpu_lock = _thread.allocate_lock()
+
+def mpu_write(reg, data):
+    with mpu_lock:
+        i2c_bus.writeto_mem(MPU_ADDR, reg, bytes([data]))
+
+def mpu_read(reg, n=1):
+    with mpu_lock:
+        return i2c_bus.readfrom_mem(MPU_ADDR, reg, n)
+
+if mpu_enabled:
+    mpu_write(0x6B, 0)
+    print("MPU6050: Initialized")
+else:
+    print("MPU6050: Not detected")
+
+def read_mpu():
+    data = mpu_read(0x3B, 14)
+    vals = struct.unpack('>hhhhhhh', data)
+    accel_x, accel_y, accel_z, temp_raw, gyro_x, gyro_y, gyro_z = vals
+    return {"accel": (accel_x/16384.0, accel_y/16384.0, accel_z/16384.0),
+            "gyro": (gyro_x/131.0, gyro_y/131.0, gyro_z/131.0),
+            "temp": (temp_raw/340.0)+36.53}
+
+def create_prediction_payload(mpu_data=None):
+    """Create prediction payload based on current sensor data"""
+    
+    if mpu_data is None and mpu_enabled:
+        mpu_data = read_mpu()
+    
+    if not mpu_data:
+        mpu_data = {"accel": (0.0, 0.0, 0.0), "gyro": (0.0, 0.0, 0.0), "temp": 0.0}
+    
+    with gps_lock:
+        payload = {
+            "device_id": DEVICE_ID,
+            "fleet_id": FLEET_ID,
+            "Cn0DbHz": 45.5,
+            "Svid": int(safe_convert(gps_data.get('satellites', '0'), int, 12)),
+            "SvElevationDegrees": 35.2,
+            "SvAzimuthDegrees": 120.8,
+            "IMU_MessageType": "UncalAccel",
+            "MeasurementX": mpu_data["accel"][0],
+            "MeasurementY": mpu_data["accel"][1],
+            "MeasurementZ": mpu_data["accel"][2],
+            "BiasX": 0.0,
+            "BiasY": 0.0,
+            "BiasZ": 0.0,
+            "Speed": gps_data.get('raw_speed_kmh', 0.0)
+        }
+    
+    return payload
+
+# -------------------- Thread Functions --------------------
+def http_thread():
+    """Background thread for HTTP requests"""
+    print("HTTP thread started")
+    
+    while True:
+        time.sleep(REFRESH_INTERVAL)
         
-# def mpu_read(reg,n=1): 
-#     with mpu_lock:
-#         return i2c_bus.readfrom_mem(MPU_ADDR, reg, n)
-
-# if mpu_enabled:
-#     mpu_write(0x6B,0)
-#     print("MPU6050: Initialized")
-# else: print("MPU6050: Not detected")
-
-# def read_mpu():
-#     data = mpu_read(0x3B,14)
-#     vals = struct.unpack('>hhhhhhh',data)
-#     accel_x,accel_y,accel_z,temp_raw,gyro_x,gyro_y,gyro_z = vals
-#     return {"accel": (accel_x/16384.0, accel_y/16384.0, accel_z/16384.0),
-#             "gyro": (gyro_x/131.0, gyro_y/131.0, gyro_z/131.0),
-#             "temp": (temp_raw/340.0)+36.53}
-
-# # -------------------- Keypad Setup --------------------
-# row_pins = [13,12,14,27]; col_pins = [26,25,23,32]
-# rows = [Pin(pin, Pin.OUT) for pin in row_pins]
-# cols = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in col_pins]
-# key_map = [['1','2','3','A'],['4','5','6','B'],['7','8','9','C'],['*','0','#','D']]
-# last_key=None; last_time=0
-
-# def scan_keypad():
-#     global last_key,last_time
-#     for i,row in enumerate(rows):
-#         row.value(1)
-#         for j,col in enumerate(cols):
-#             if col.value()==1:
-#                 key=key_map[i][j]
-#                 if key!=last_key or (time.ticks_ms()-last_time)>200:
-#                     last_key=key; last_time=time.ticks_ms()
-#                     row.value(0)
-#                     return key
-#         row.value(0)
-#     return None
-
-# # -------------------- Global Variables --------------------
-# current_status = "STANDBY"
-# gsm_initialized = False
-# status_lock = _thread.allocate_lock()
-# http_request_active = False
-# http_response = ""
-# http_status_code = ""
-# http_lock = _thread.allocate_lock()
-
-# def set_status(new_status):
-#     global current_status
-#     with status_lock:
-#         current_status = new_status
-
-# def get_status():
-#     with status_lock:
-#         return current_status
-
-# def set_http_active(active):
-#     global http_request_active
-#     with http_lock:
-#         http_request_active = active
-
-# def is_http_active():
-#     with http_lock:
-#         return http_request_active
-
-# # -------------------- HTTP Thread Function --------------------
-# def http_thread():
-#     print("HTTP thread started")
-    
-#     # Hardcoded test data
-#     test_json_data = '''{
-#   "fleet_id": "68b3e4d19f1c8d7ccdb6c991",
-#   "device_id": "JANITHTEST",
-#   "Cn0DbHz": 45.5,
-#   "Svid": 12,
-#   "SvElevationDegrees": 35.2,
-#   "SvAzimuthDegrees": 120.8,
-#   "IMU_MessageType": "UncalAccel", 
-#   "MeasurementX": 0.7854004,
-#   "MeasurementY": -0.6618652,
-#   "MeasurementZ": -0.06811523,
-#   "BiasX": 0.0,
-#   "BiasY": 0.0,
-#   "BiasZ": 0.0,
-#   "raw_latitude": 8.585581,
-#   "raw_longitude": 124.769386,
-#   "raw_altitude": 3.0
-# }'''
-
-#     while True:
-#         time.sleep(30)  # Wait 30 seconds between requests
-#         if gsm_initialized:
-#             print("Starting HTTP POST request in background...")
-#             set_http_active(True)
-#             try:
-#                 # First try with SSL
-#                 print("Attempting POST with SSL...")
-#                 gsm_http_post("http://60ee3ba2f17650722b29736f77460b16.serveo.net/predict", test_json_data, use_ssl=False)
+        with http_lock:
+            show_message("HTTP Request", "Health check...")
+            
+            # Health check
+            health_status = ping_health_endpoint()
+            if health_status:
+                print("✓ Backend health: OK")
+                show_message("Health Check", "Status: OK")
+            else:
+                print("✗ Backend health: FAILED")
+                show_message("Health Check", f"Status: {last_health_status}")
+            
+            time.sleep(1)
+            
+            # Send prediction data
+            show_message("HTTP Request", "Sending data...")
+            try:
+                mpu_data = read_mpu() if mpu_enabled else None
+                prediction_payload = create_prediction_payload(mpu_data)
+                prediction_success = send_prediction_data(prediction_payload)
                 
-#                 # If SSL fails (603), try without SSL (but this won't work with HTTPS)
-#                 # You might want to add a fallback HTTP URL for testing
+                if prediction_success:
+                    print("✓ Prediction data sent successfully")
+                    show_message("Prediction Sent", "Status: OK")
+                else:
+                    print("✗ Failed to send prediction data")
+                    show_message("Prediction Failed", f"Status: {last_prediction_status}")
+            except Exception as e:
+                print(f"✗ Prediction error: {e}")
+                show_message("Prediction Error", str(e)[:20])
+
+def gps_thread():
+    """Background thread for GPS reading"""
+    print("GPS thread started")
+    
+    while True:
+        if gps_enabled and gps and gps.any():
+            try:
+                sentence = gps.readline().decode('ascii').strip()
+                parse_nmea(sentence)
                 
-#             except Exception as e:
-#                 print("HTTP POST thread error:", e)
-#                 # Fallback: try the old health check
-#                 try:
-#                     print("Fallback to health check...")
-#                     # gsm_http_get("http://0902ca5f11ff.ngrok-free.app/predict")
-#                 except Exception as e2:
-#                     print("Fallback also failed:", e2)
-#             finally:
-#                 set_http_active(False)
-#             print("HTTP request completed")
-#         else:
-#             print("GSM not initialized, skipping HTTP request")
+                with gps_lock:
+                    if gps_data['fix_status'] == "Active":
+                        display_gps_data()
+                    else:
+                        print("GPS: Searching for satellites...")
+            except Exception as e:
+                print("GPS error:", e)
+        else:
+            time.sleep(1)
 
-# # -------------------- GPS Thread Function --------------------
-# def gps_thread():
-#     global gps  # <-- important: tell Python you mean the global gps variable
-#     print("GPS thread started")
-#     buffer = ""  # Buffer to accumulate partial sentences
-#     last_display_time = time.time()
-#     display_interval = 5  # Display GPS data every 5 seconds
-
-#     while True:
-#         try:
-#             if gps_enabled and gps:
-#                 try:
-#                     # Check if data is available (some ports don't implement .any())
-#                     available = False
-#                     try:
-#                         available = gps.any() if callable(getattr(gps, "any", None)) else False
-#                     except Exception:
-#                         # Some UART implementations may throw; fallback to read with timeout
-#                         available = False
-
-#                     if available:
-#                         data = gps.read()
-#                         if data:
-#                             # Decode bytes to string, handling encoding errors
-#                             try:
-#                                 text = data.decode('ascii', errors='ignore')
-#                             except Exception:
-#                                 text = str(data)
-
-#                             # Add to buffer
-#                             buffer += text
-
-#                             # Process complete sentences
-#                             while '\n' in buffer:
-#                                 line, buffer = buffer.split('\n', 1)
-#                                 sentence = line.strip()
-
-#                                 # Only process valid NMEA sentences
-#                                 if sentence.startswith('$') and len(sentence) > 10:
-#                                     try:
-#                                         parse_nmea(sentence)
-#                                     except Exception as parse_error:
-#                                         print(f"GPS parse error: {parse_error}")
-#                                         # keep going to next sentence
-
-#                             # Prevent buffer growing indefinitely
-#                             if len(buffer) > 1000:
-#                                 buffer = buffer[-500:]  # keep last 500 chars
-
-#                     else:
-#                         # No data available, short sleep
-#                         time.sleep(0.1)
-
-#                     # Display GPS data periodically (not on every sentence)
-#                     current_time = time.time()
-#                     if current_time - last_display_time >= display_interval:
-#                         try:
-#                             with gps_lock:
-#                                 if gps_data.get('fix_status') == "Active":
-#                                     display_gps_data()
-#                                 else:
-#                                     print("GPS: Searching for satellites...")
-#                             last_display_time = current_time
-#                         except Exception as display_error:
-#                             print(f"GPS display error: {display_error}")
-
-#                 except Exception as read_error:
-#                     print(f"GPS read error: {read_error}")
-#                     time.sleep(0.5)  # Wait before retrying
-
-#             else:
-#                 # GPS not enabled or gps object is None
-#                 print("GPS not enabled or not available, thread sleeping...")
-#                 time.sleep(10)
-
-#         except Exception as e:
-#             # Top-level safeguard so thread doesn't die
-#             print(f"GPS thread critical error: {e}")
-#             time.sleep(2)  # Wait before continuing
-
-#             # Try to reinitialize GPS if flag says it's enabled but object is None
-#             if gps_enabled and not gps:
-#                 try:
-#                     # reassign to global gps
-#                     gps = UART(1, baudrate=9600, tx=17, rx=16)
-#                     print("GPS: Reinitialized after error")
-#                 except Exception as reinit_err:
-#                     print("GPS: Reinitialize failed:", reinit_err)
-#                     time.sleep(5)
-
-# # -------------------- MPU Thread Function --------------------
-# def mpu_thread():
-#     print("MPU thread started")
-#     while True:
-#         if mpu_enabled:
-#             try:
-#                 mpu_data = read_mpu()
-#                 print("MPU Accel:", mpu_data["accel"], "Gyro:", mpu_data["gyro"], "Temp:", round(mpu_data["temp"],2))
-#             except Exception as e:
-#                 print("MPU thread error:", e)
-#         time.sleep(2)  # Read MPU data every 2 seconds
-
-# # -------------------- Initialization --------------------
-# print("System Running...")
-# show_message("Bus Online","Initializing...")
-
-# if gsm_enabled:
-#     gsm_status()
-#     if gsm_gprs_connect("internet","",""):
-#         gsm_initialized=True
-#         print("GPRS Connected.")
-#     else:
-#         print("GPRS connection failed")
-
-# print("Initialization complete!")
-# show_message("Bus Online","Monitoring...")
-
-# # Start background threads
-# try:
-#     _thread.start_new_thread(http_thread, ())
-#     print("HTTP thread started successfully")
-# except Exception as e:
-#     print("Failed to start HTTP thread:", e)
-
-# try:
-#     _thread.start_new_thread(gps_thread, ())
-#     print("GPS thread started successfully")
-# except Exception as e:
-#     print("Failed to start GPS thread:", e)
-
-# try:
-#     _thread.start_new_thread(mpu_thread, ())
-#     print("MPU thread started successfully")
-# except Exception as e:
-#     print("Failed to start MPU thread:", e)
-
-# # -------------------- Main Loop (UI Thread) --------------------
-# loop_count = 0
-
-# while True:
-#     loop_count += 1
+def mpu_thread():
+    """Background thread for MPU6050 reading"""
+    print("MPU thread started")
     
-#     # Keypad input (runs in main thread for immediate response)
-#     key = scan_keypad()
-#     if key:
-#         if key == '1': set_status("FULL")
-#         elif key == '2': set_status("AVAILABLE")
-#         elif key == 'A': set_status("STANDING")
-#         elif key == '4': set_status("INACTIVE")
-#         elif key == '5': set_status("HELP REQUESTED")
-#         else: set_status("INVALID")
+    while True:
+        if mpu_enabled:
+            try:
+                mpu_data = read_mpu()
+                print("MPU Accel:", mpu_data["accel"], 
+                      "Gyro:", mpu_data["gyro"], 
+                      "Temp:", round(mpu_data["temp"], 2))
+            except Exception as e:
+                print("MPU thread error:", e)
+        time.sleep(2)
+
+# -------------------- Initialization --------------------
+print("\nSystem Running...")
+show_message("Bus Online", "Initializing...")
+
+if HTTP_AVAILABLE and WIFI_AVAILABLE:
+    print("Initializing WiFi...")
+    wifi_connected = connect_wifi()
+else:
+    wifi_connected = False
+    print("WiFi not available")
+    show_message("WiFi Not Available", "Check modules")
+
+print("Initialization complete!")
+show_message("Bus Online", "Monitoring...")
+
+# Start background threads
+try:
+    _thread.start_new_thread(http_thread, ())
+    print("HTTP thread started successfully")
+except Exception as e:
+    print("Failed to start HTTP thread:", e)
+
+try:
+    _thread.start_new_thread(gps_thread, ())
+    print("GPS thread started successfully")
+except Exception as e:
+    print("Failed to start GPS thread:", e)
+
+try:
+    _thread.start_new_thread(mpu_thread, ())
+    print("MPU thread started successfully")
+except Exception as e:
+    print("Failed to start MPU thread:", e)
+
+# -------------------- Main Loop (Display Updates) --------------------
+loop_count = 0
+
+while True:
+    loop_count += 1
+    
+    # Update display with system status
+    if loop_count % 5 == 0:  # Every 5 seconds
+        with gps_lock:
+            gps_status = gps_data.get('fix_status', 'No Fix')
+            satellites = gps_data.get('satellites', '0')
         
-#         current_status = get_status()
+        with http_lock:
+            health = last_health_status[:10]
+            pred = last_prediction_status[:10]
         
-#         # Show HTTP status indicator
-#         http_indicator = " [HTTP]" if is_http_active() else ""
-#         show_message("STATUS:", current_status + http_indicator)
-#         print("Key pressed:", key, "| Bus Status:", current_status)
+        show_message(
+            "Bus Monitoring",
+            f"GPS: {gps_status[:14]}",
+            f"Sats: {satellites} H:{health}",
+            f"P:{pred} L:{loop_count}"
+        )
     
-#     # Update display periodically with current status
-#     if loop_count % 10 == 0:  # Every 10 iterations (roughly 10 seconds)
-#         current_status = get_status()
-#         http_indicator = " [HTTP]" if is_http_active() else ""
-#         gsm_status_text = "Connected" if gsm_initialized else "Not Connected"
-#         show_message("Bus Online", 
-#                     f"Status: {current_status[:12]}", 
-#                     f"GSM: {gsm_status_text[:12]}", 
-#                     f"Loop: {loop_count}{http_indicator}")
+    print(f"Loop {loop_count} | GPS: {gps_data.get('fix_status', 'Unknown')} | "
+          f"Health: {last_health_status} | Pred: {last_prediction_status}")
     
-#     print(f"Loop {loop_count} | Status: {get_status()} | GSM: {'Connected' if gsm_initialized else 'Not Connected'} | HTTP Active: {is_http_active()}")
-#     time.sleep(1)
+    time.sleep(1)
