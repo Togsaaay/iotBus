@@ -1,3 +1,4 @@
+
 from machine import UART, Pin, I2C
 import time, struct, utime, _thread
 from lcd_api import LcdApi
@@ -5,7 +6,7 @@ from i2c_lcd import I2cLcd
 
 # -------------------- LCD Setup --------------------
 I2C_ADDR = 0x27
-i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
+i2c_lcd = I2C(0, scl=Pin(5), sda=Pin(19), freq=400000)
 lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
 
 # Thread-safe LCD lock
