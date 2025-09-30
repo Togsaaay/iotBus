@@ -1,29 +1,9 @@
 from machine import UART, Pin, I2C
-import time
-import struct
-import utime
-import ujson
-import _thread
+import time, struct, utime, _thread, ujson
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 
-# -------------------- LCD Setup --------------------
-I2C_ADDR = 0x27
-i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
-lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
-
-# Thread-safe LCD lock
-lcd_lock = _thread.allocate_lock()
-
-def show_message(line1="", line2="", line3="", line4=""):
-    with lcd_lock:
-        lcd.clear()
-        lcd.move_to(0,0); lcd.putstr(line1[:20])
-        lcd.move_to(0,1); lcd.putstr(line2[:20])
-        lcd.move_to(0,2); lcd.putstr(line3[:20])
-        lcd.move_to(0,3); lcd.putstr(line4[:20])
-
-# -------------------- HTTP and WiFi Setup --------------------
+# Import for HTTP requests and WiFi
 try:
     import urequests as requests
     import network
@@ -42,28 +22,42 @@ except ImportError:
         WIFI_AVAILABLE = False
         print("HTTP/WiFi modules not available")
 
-# Health check and prediction configuration
+# -------------------- Configuration --------------------
 HEALTH_URL = "https://ridealert-backend.onrender.com/health"
 PREDICT_URL = "https://ridealert-backend.onrender.com/predict"
 REFRESH_INTERVAL = 7.5  # seconds
 
-# Static configuration
 VEHICLE_ID = "68b3ef0d3ed9beb95ace98fc"
 FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
 DEVICE_ID = "iot-device-001"
 
-# WiFi credentials
 WIFI_SSID = "JFADeco_AD5C"
 WIFI_PASSWORD = "1234567890"
 
-# Status tracking
+# -------------------- LCD Setup --------------------
+I2C_ADDR = 0x27
+i2c_lcd = I2C(0, scl=Pin(19), sda=Pin(18), freq=400000)
+lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
+
+# Thread-safe LCD lock
+lcd_lock = _thread.allocate_lock()
+
+def show_message(line1="", line2="", line3="", line4=""):
+    with lcd_lock:
+        lcd.clear()
+        lcd.move_to(0,0); lcd.putstr(line1[:20])
+        lcd.move_to(0,1); lcd.putstr(line2[:20])
+        lcd.move_to(0,2); lcd.putstr(line3[:20])
+        lcd.move_to(0,3); lcd.putstr(line4[:20])
+
+# -------------------- WiFi Functions --------------------
 wifi_connected = False
 last_health_status = "Unknown"
 last_prediction_status = "Unknown"
-http_lock = _thread.allocate_lock()
 
 def connect_wifi():
     """Connect to WiFi network"""
+    global wifi_connected
     if not WIFI_AVAILABLE:
         print("WiFi not available")
         return False
@@ -75,6 +69,7 @@ def connect_wifi():
         if wlan.isconnected():
             print("Already connected to WiFi")
             print(f"IP: {wlan.ifconfig()[0]}")
+            wifi_connected = True
             return True
 
         print(f"Connecting to WiFi: {WIFI_SSID}")
@@ -84,36 +79,34 @@ def connect_wifi():
         while timeout > 0:
             if wlan.isconnected():
                 print(f"WiFi connected! IP: {wlan.ifconfig()[0]}")
-                show_message("WiFi Connected", f"IP: {wlan.ifconfig()[0][:16]}")
+                wifi_connected = True
                 return True
             time.sleep(1)
             timeout -= 1
-            print(".", end="")
 
-        print("\nWiFi connection failed")
-        show_message("WiFi Failed", "Check credentials")
+        print("WiFi connection failed")
+        wifi_connected = False
         return False
 
     except Exception as e:
         print(f"WiFi connection error: {e}")
+        wifi_connected = False
         return False
 
 def ping_health_endpoint():
-    """Make a proper GET request to the health endpoint"""
+    """Make GET request to health endpoint"""
     global last_health_status
 
     if not HTTP_AVAILABLE:
-        print("HTTP not available - skipping health check")
         last_health_status = "No HTTP"
         return False
 
     if not connect_wifi():
-        print("No WiFi connection - skipping health check")
         last_health_status = "No WiFi"
         return False
 
     try:
-        print(f"Making GET request to: {HEALTH_URL}")
+        print(f"Health check: {HEALTH_URL}")
         headers = {
             'User-Agent': 'ESP32-IoT-Bus/1.0',
             'Accept': 'application/json'
@@ -123,40 +116,35 @@ def ping_health_endpoint():
         print(f"Response status: {response.status_code}")
 
         if response.status_code == 200:
-            print("✓ Health check successful")
+            print("✓ Health check OK")
             last_health_status = "OK"
             response.close()
             return True
         else:
-            print(f"✗ Health check failed with status: {response.status_code}")
+            print(f"✗ Health check failed: {response.status_code}")
             last_health_status = f"HTTP {response.status_code}"
             response.close()
             return False
 
-    except OSError as e:
-        print(f"Network error: {e}")
-        last_health_status = "Network Error"
-        return False
     except Exception as e:
         print(f"Health check error: {e}")
+        last_health_status = "Error"
         return False
 
 def send_prediction_data(prediction_payload):
-    """Send prediction data to the predict endpoint"""
+    """Send prediction data to predict endpoint"""
     global last_prediction_status
     
     if not HTTP_AVAILABLE:
-        print("HTTP not available - skipping prediction")
         last_prediction_status = "No HTTP"
         return False
 
     if not connect_wifi():
-        print("No WiFi connection - skipping prediction")
         last_prediction_status = "No WiFi"
         return False
 
     try:
-        print(f"Sending prediction data to: {PREDICT_URL}")
+        print(f"Sending prediction: {PREDICT_URL}")
         headers = {
             'User-Agent': 'ESP32-IoT-Bus/1.0',
             'Content-Type': 'application/json',
@@ -164,35 +152,25 @@ def send_prediction_data(prediction_payload):
         }
         
         json_data = ujson.dumps(prediction_payload)
-        print(f"Payload: {json_data}")
+        print(f"Payload size: {len(json_data)} bytes")
         
         response = requests.post(PREDICT_URL, data=json_data, headers=headers, timeout=15)
-        print(f"Prediction response status: {response.status_code}")
-        
-        try:
-            content = response.text
-            print(f"Prediction response: {content}")
-        except:
-            print("Could not read prediction response")
+        print(f"Prediction status: {response.status_code}")
         
         if response.status_code == 200:
-            print("✓ Prediction data sent successfully")
+            print("✓ Prediction sent")
             last_prediction_status = "OK"
             response.close()
             return True
         else:
-            print(f"✗ Prediction failed with status: {response.status_code}")
+            print(f"✗ Prediction failed: {response.status_code}")
             last_prediction_status = f"HTTP {response.status_code}"
             response.close()
             return False
             
-    except OSError as e:
-        print(f"Network error during prediction: {e}")
-        last_prediction_status = "Network Error"
-        return False
     except Exception as e:
         print(f"Prediction error: {e}")
-        last_prediction_status = f"Error: {str(e)}"
+        last_prediction_status = f"Error"
         return False
 
 # -------------------- GPS Setup --------------------
@@ -206,27 +184,10 @@ except:
     print("GPS: Not detected")
 
 gps_data = {
-    'message_type': '',
-    'utc_time': '',
-    'date': '',
-    'latitude': '',
-    'longitude': '',
-    'altitude': '',
-    'speed': '',
-    'course': '',
-    'fix_status': '',
-    'fix_quality': '',
-    'satellites': '',
-    'hdop': '',
-    'vdop': '',
-    'pdop': '',
-    'mode': '',
-    'satellite_info': {},
-    'raw_sentences': [],
-    'raw_latitude': 0.0,
-    'raw_longitude': 0.0,
-    'raw_altitude': 0.0,
-    'raw_speed_kmh': 0.0
+    'utc_time': '', 'date': '', 'latitude': '', 'longitude': '',
+    'altitude': '', 'speed': '', 'course': '', 'fix_status': '',
+    'fix_quality': '', 'satellites': '', 'raw_latitude': 0.0,
+    'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed_kmh': 0.0
 }
 gps_lock = _thread.allocate_lock()
 
@@ -238,82 +199,89 @@ def safe_convert(value, converter, default):
 
 def convert_coord(coord, direction):
     try:
+        if not coord or not direction:
+            return 0.0, "0.0°"
         val = float(coord)
-        degrees = int(val / 100)
-        minutes = val - degrees * 100
-        decimal = degrees + minutes / 60
-        if direction in ['S', 'W']:
+        if val == 0:
+            return 0.0, "0.0°"
+        degrees = int(val // 100)
+        minutes = val - (degrees * 100)
+        if minutes >= 60:
+            return 0.0, "0.0°"
+        decimal = degrees + (minutes / 60)
+        if direction.upper() in ['S', 'W']:
             decimal = -decimal
         return decimal, f"{decimal:.6f}°"
     except:
         return 0.0, "0.0°"
 
 def parse_nmea(sentence):
-    if not sentence.startswith('$'):
-        return
-
-    parts = sentence.split(',')
-    sentence_type = parts[0][1:]
-
-    if sentence_type == 'GPGGA':
-        with gps_lock:
-            gps_data['message_type'] = 'GPGGA'
-            gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}" if len(parts[1]) >= 6 else ''
-            
-            if parts[2]:
-                raw_lat, formatted_lat = convert_coord(parts[2], parts[3])
-                gps_data['latitude'] = formatted_lat
-                gps_data['raw_latitude'] = raw_lat
-            
-            if parts[4]:
-                raw_lon, formatted_lon = convert_coord(parts[4], parts[5])
-                gps_data['longitude'] = formatted_lon
-                gps_data['raw_longitude'] = raw_lon
-            
-            gps_data['fix_quality'] = parts[6]
-            gps_data['satellites'] = parts[7]
-            gps_data['hdop'] = parts[8]
-            
-            altitude_raw = safe_convert(parts[9], float, 0.0)
-            gps_data['altitude'] = f"{altitude_raw:.1f} m"
-            gps_data['raw_altitude'] = altitude_raw
-            
-            gps_data['fix_status'] = "Active" if parts[6] != '0' else "No Fix"
-
-    elif sentence_type == 'GPRMC':
-        with gps_lock:
-            gps_data['message_type'] = 'GPRMC'
-            if len(parts[1]) >= 6:
-                gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}"
-            if len(parts[9]) >= 6:
-                gps_data['date'] = f"20{parts[9][4:6]}-{parts[9][2:4]}-{parts[9][0:2]}"
-            
-            speed_knots = safe_convert(parts[7], float, 0.0)
-            speed_kmh = speed_knots * 1.852
-            gps_data['speed'] = f"{speed_kmh:.1f} km/h"
-            gps_data['raw_speed_kmh'] = speed_kmh
-            
-            gps_data['course'] = f"{safe_convert(parts[8], float, 0.0):.1f}°"
-
-    with gps_lock:
-        gps_data['raw_sentences'].append(sentence)
+    try:
+        if not sentence or not sentence.startswith('$'):
+            return
+        
+        sentence = sentence.strip()
+        if '*' in sentence:
+            sentence = sentence.split('*')[0]
+        
+        parts = sentence.split(',')
+        if len(parts) < 3:
+            return
+        
+        sentence_type = parts[0][1:]
+        
+        if sentence_type == 'GPGGA' and len(parts) >= 15:
+            with gps_lock:
+                if parts[1] and len(parts[1]) >= 6:
+                    gps_data['utc_time'] = f"{parts[1][0:2]}:{parts[1][2:4]}:{parts[1][4:6]}"
+                
+                if parts[2] and parts[3]:
+                    raw_lat, fmt_lat = convert_coord(parts[2], parts[3])
+                    gps_data['latitude'] = fmt_lat
+                    gps_data['raw_latitude'] = raw_lat
+                
+                if parts[4] and parts[5]:
+                    raw_lon, fmt_lon = convert_coord(parts[4], parts[5])
+                    gps_data['longitude'] = fmt_lon
+                    gps_data['raw_longitude'] = raw_lon
+                
+                gps_data['fix_quality'] = parts[6] if parts[6] else '0'
+                gps_data['satellites'] = parts[7] if parts[7] else '0'
+                
+                if parts[9]:
+                    alt_val = safe_convert(parts[9], float, 0.0)
+                    gps_data['altitude'] = f"{alt_val:.1f} m"
+                    gps_data['raw_altitude'] = alt_val
+                
+                gps_data['fix_status'] = "Active" if parts[6] != '0' else "No Fix"
+        
+        elif sentence_type == 'GPRMC' and len(parts) >= 12:
+            with gps_lock:
+                if parts[2] == 'A':
+                    if parts[9] and len(parts[9]) == 6:
+                        gps_data['date'] = f"20{parts[9][4:6]}-{parts[9][2:4]}-{parts[9][0:2]}"
+                    if parts[7]:
+                        speed_knots = safe_convert(parts[7], float, 0.0)
+                        speed_kmh = speed_knots * 1.852
+                        gps_data['speed'] = f"{speed_kmh:.1f} km/h"
+                        gps_data['raw_speed_kmh'] = speed_kmh
+                    if parts[8]:
+                        gps_data['course'] = f"{safe_convert(parts[8], float, 0.0):.1f}°"
+    
+    except Exception as e:
+        print(f"NMEA parse error: {e}")
 
 def display_gps_data():
     with gps_lock:
-        print("GPS Info")
-        print(f"UTC Time: {gps_data['utc_time']}")
-        print(f"Date: {gps_data['date']}")
-        print(f"Latitude: {gps_data['latitude']}")
-        print(f"Longitude: {gps_data['longitude']}")
-        print(f"Altitude: {gps_data['altitude']}")
-        print(f"Speed: {gps_data['speed']}")
-        print(f"Satellites: {gps_data['satellites']}")
+        print(f"Time: {gps_data['utc_time']} {gps_data['date']}")
+        print(f"Pos: {gps_data['latitude']} {gps_data['longitude']}")
+        print(f"Alt: {gps_data['altitude']} Speed: {gps_data['speed']}")
+        print(f"Fix: {gps_data['fix_status']} Sats: {gps_data['satellites']}")
 
 # -------------------- MPU6050 Setup --------------------
 MPU_ADDR = 0x68
 i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
-devices = i2c_bus.scan()
-mpu_enabled = MPU_ADDR in devices
+mpu_enabled = MPU_ADDR in i2c_bus.scan()
 mpu_lock = _thread.allocate_lock()
 
 def mpu_write(reg, data):
@@ -334,15 +302,19 @@ def read_mpu():
     data = mpu_read(0x3B, 14)
     vals = struct.unpack('>hhhhhhh', data)
     accel_x, accel_y, accel_z, temp_raw, gyro_x, gyro_y, gyro_z = vals
-    return {"accel": (accel_x/16384.0, accel_y/16384.0, accel_z/16384.0),
-            "gyro": (gyro_x/131.0, gyro_y/131.0, gyro_z/131.0),
-            "temp": (temp_raw/340.0)+36.53}
+    return {
+        "accel": (accel_x/16384.0, accel_y/16384.0, accel_z/16384.0),
+        "gyro": (gyro_x/131.0, gyro_y/131.0, gyro_z/131.0),
+        "temp": (temp_raw/340.0) + 36.53
+    }
 
 def create_prediction_payload(mpu_data=None):
-    """Create prediction payload based on current sensor data"""
-    
+    """Create prediction payload from sensor data"""
     if mpu_data is None and mpu_enabled:
-        mpu_data = read_mpu()
+        try:
+            mpu_data = read_mpu()
+        except:
+            mpu_data = None
     
     if not mpu_data:
         mpu_data = {"accel": (0.0, 0.0, 0.0), "gyro": (0.0, 0.0, 0.0), "temp": 0.0}
@@ -368,78 +340,124 @@ def create_prediction_payload(mpu_data=None):
     return payload
 
 # -------------------- Thread Functions --------------------
-def http_thread():
-    """Background thread for HTTP requests"""
-    print("HTTP thread started")
-    
-    while True:
-        time.sleep(REFRESH_INTERVAL)
-        
-        with http_lock:
-            show_message("HTTP Request", "Health check...")
-            
-            # Health check
-            health_status = ping_health_endpoint()
-            if health_status:
-                print("✓ Backend health: OK")
-                show_message("Health Check", "Status: OK")
-            else:
-                print("✗ Backend health: FAILED")
-                show_message("Health Check", f"Status: {last_health_status}")
-            
-            time.sleep(1)
-            
-            # Send prediction data
-            show_message("HTTP Request", "Sending data...")
-            try:
-                mpu_data = read_mpu() if mpu_enabled else None
-                prediction_payload = create_prediction_payload(mpu_data)
-                prediction_success = send_prediction_data(prediction_payload)
-                
-                if prediction_success:
-                    print("✓ Prediction data sent successfully")
-                    show_message("Prediction Sent", "Status: OK")
-                else:
-                    print("✗ Failed to send prediction data")
-                    show_message("Prediction Failed", f"Status: {last_prediction_status}")
-            except Exception as e:
-                print(f"✗ Prediction error: {e}")
-                show_message("Prediction Error", str(e)[:20])
-
 def gps_thread():
-    """Background thread for GPS reading"""
+    global gps
     print("GPS thread started")
-    
+    buffer = ""
+    last_display_time = time.time()
+    display_interval = 5
+
     while True:
-        if gps_enabled and gps and gps.any():
-            try:
-                sentence = gps.readline().decode('ascii').strip()
-                parse_nmea(sentence)
-                
-                with gps_lock:
-                    if gps_data['fix_status'] == "Active":
-                        display_gps_data()
+        try:
+            if gps_enabled and gps:
+                try:
+                    available = False
+                    try:
+                        available = gps.any() if callable(getattr(gps, "any", None)) else False
+                    except:
+                        available = False
+
+                    if available:
+                        data = gps.read()
+                        if data:
+                            try:
+                                text = data.decode('ascii', errors='ignore')
+                            except:
+                                text = str(data)
+
+                            buffer += text
+                            while '\n' in buffer:
+                                line, buffer = buffer.split('\n', 1)
+                                sentence = line.strip()
+                                if sentence.startswith('$') and len(sentence) > 10:
+                                    try:
+                                        parse_nmea(sentence)
+                                    except Exception as e:
+                                        print(f"GPS parse error: {e}")
+
+                            if len(buffer) > 1000:
+                                buffer = buffer[-500:]
                     else:
-                        print("GPS: Searching for satellites...")
-            except Exception as e:
-                print("GPS error:", e)
-        else:
-            time.sleep(1)
+                        time.sleep(0.1)
+
+                    current_time = time.time()
+                    if current_time - last_display_time >= display_interval:
+                        try:
+                            with gps_lock:
+                                if gps_data.get('fix_status') == "Active":
+                                    display_gps_data()
+                                else:
+                                    print("GPS: Searching...")
+                            last_display_time = current_time
+                        except Exception as e:
+                            print(f"GPS display error: {e}")
+
+                except Exception as e:
+                    print(f"GPS read error: {e}")
+                    time.sleep(0.5)
+            else:
+                time.sleep(10)
+
+        except Exception as e:
+            print(f"GPS thread error: {e}")
+            time.sleep(2)
+            if gps_enabled and not gps:
+                try:
+                    gps = UART(1, baudrate=9600, tx=18, rx=16)
+                    print("GPS: Reinitialized")
+                except Exception as e:
+                    print("GPS: Reinit failed:", e)
+                    time.sleep(5)
 
 def mpu_thread():
-    """Background thread for MPU6050 reading"""
     print("MPU thread started")
-    
     while True:
         if mpu_enabled:
             try:
                 mpu_data = read_mpu()
-                print("MPU Accel:", mpu_data["accel"], 
-                      "Gyro:", mpu_data["gyro"], 
-                      "Temp:", round(mpu_data["temp"], 2))
+                print(f"MPU - Accel: {mpu_data['accel']}, Temp: {round(mpu_data['temp'],2)}°C")
             except Exception as e:
-                print("MPU thread error:", e)
+                print(f"MPU error: {e}")
         time.sleep(2)
+
+def http_thread():
+    print("HTTP thread started")
+    while True:
+        time.sleep(REFRESH_INTERVAL)
+        
+        # Health check
+        print("--- Health Check ---")
+        ping_health_endpoint()
+        
+        # Send prediction
+        print("--- Prediction ---")
+        try:
+            mpu_data = None
+            if mpu_enabled:
+                try:
+                    mpu_data = read_mpu()
+                except:
+                    pass
+            
+            payload = create_prediction_payload(mpu_data)
+            send_prediction_data(payload)
+        except Exception as e:
+            print(f"Prediction error: {e}")
+        
+        # Update LCD
+        try:
+            with gps_lock:
+                fix = gps_data.get('fix_status', 'Unknown')[:8]
+                sats = gps_data.get('satellites', '0')
+            
+            show_message(
+                "Bus Online",
+                f"Health: {last_health_status[:12]}",
+                f"Predict: {last_prediction_status[:10]}",
+                f"GPS:{fix} S:{sats}"
+            )
+        except Exception as e:
+            print(f"LCD update error: {e}")
 
 # -------------------- Initialization --------------------
 print("\nSystem Running...")
@@ -451,54 +469,42 @@ if HTTP_AVAILABLE and WIFI_AVAILABLE:
 else:
     wifi_connected = False
     print("WiFi not available")
-    show_message("WiFi Not Available", "Check modules")
 
-print("Initialization complete!")
-show_message("Bus Online", "Monitoring...")
+show_message("Bus Online", "Starting threads...")
 
-# Start background threads
-try:
-    _thread.start_new_thread(http_thread, ())
-    print("HTTP thread started successfully")
-except Exception as e:
-    print("Failed to start HTTP thread:", e)
-
+# Start threads
 try:
     _thread.start_new_thread(gps_thread, ())
-    print("GPS thread started successfully")
+    print("GPS thread started")
 except Exception as e:
-    print("Failed to start GPS thread:", e)
+    print(f"Failed to start GPS thread: {e}")
 
 try:
     _thread.start_new_thread(mpu_thread, ())
-    print("MPU thread started successfully")
+    print("MPU thread started")
 except Exception as e:
-    print("Failed to start MPU thread:", e)
+    print(f"Failed to start MPU thread: {e}")
 
-# -------------------- Main Loop (Display Updates) --------------------
+try:
+    _thread.start_new_thread(http_thread, ())
+    print("HTTP thread started")
+except Exception as e:
+    print(f"Failed to start HTTP thread: {e}")
+
+show_message("Bus Online", "Monitoring...", f"WiFi: {'Yes' if wifi_connected else 'No'}", "Ready")
+
+# -------------------- Main Loop --------------------
 loop_count = 0
 
 while True:
     loop_count += 1
     
-    # Update display with system status
-    if loop_count % 5 == 0:  # Every 5 seconds
+    if loop_count % 10 == 0:
         with gps_lock:
-            gps_status = gps_data.get('fix_status', 'No Fix')
-            satellites = gps_data.get('satellites', '0')
+            fix = gps_data.get('fix_status', 'Unknown')
+            sats = gps_data.get('satellites', '0')
         
-        with http_lock:
-            health = last_health_status[:10]
-            pred = last_prediction_status[:10]
-        
-        show_message(
-            "Bus Monitoring",
-            f"GPS: {gps_status[:14]}",
-            f"Sats: {satellites} H:{health}",
-            f"P:{pred} L:{loop_count}"
-        )
-    
-    print(f"Loop {loop_count} | GPS: {gps_data.get('fix_status', 'Unknown')} | "
-          f"Health: {last_health_status} | Pred: {last_prediction_status}")
+        print(f"Loop {loop_count} | Health: {last_health_status} | Predict: {last_prediction_status}")
+        print(f"GPS: {fix} ({sats} sats) | WiFi: {'Connected' if wifi_connected else 'Disconnected'}")
     
     time.sleep(1)
