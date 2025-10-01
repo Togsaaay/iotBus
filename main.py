@@ -23,8 +23,8 @@ def connect_wifi(ssid, password, timeout=10):
     return True
 
 # Connect to WiFi BEFORE initializing anything else
-WIFI_SSID = "JANNINE"
-WIFI_PASSWORD = "Isaiah6022!"
+WIFI_SSID = "JFADeco_AD5C"
+WIFI_PASSWORD = "1234567890"
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 
 
