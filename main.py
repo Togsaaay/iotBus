@@ -214,7 +214,7 @@ def read_gps():
 def display_gps_data():
     print("Time:", gps_data['utc_time'], "Date:", gps_data['date'])
     print("Lat:", gps_data['latitude'], "Lon:", gps_data['longitude'])
-    print("Alt:", gps_data['altitude'], "Speed:", gps_data['speed'])
+    print("Alt:", gps_data['altitude'], "speed:", gps_data['speed'])
     print("Fix:", gps_data['fix_status'], "Sats:", gps_data['satellites'])
 
 # -------------------- MPU6050 Setup --------------------
@@ -319,7 +319,7 @@ def send_sensor_data():
             "raw_latitude": gps_data['raw_latitude'],
             "raw_longitude": gps_data['raw_longitude'],
             "raw_altitude": gps_data['raw_altitude'],
-            "Speed": gps_data['raw_speed']
+            "speed": gps_data['raw_speed']
         }
         
         # Convert to JSON
