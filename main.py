@@ -1,38 +1,41 @@
+import _thread
+import utime
+import struct
+from i2c_lcd import I2cLcd
+from lcd_api import LcdApi
+from machine import UART, Pin, I2C
 import network
 import time
 import urequests
 import ujson
 
 # -------------------- WiFi Setup (FIRST!) --------------------
+
+
 def connect_wifi(ssid, password, timeout=10):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
-    
+
     if not wlan.isconnected():
         print('Connecting to WiFi...')
         wlan.connect(ssid, password)
-        
+
         start = time.time()
         while not wlan.isconnected():
             if time.time() - start > timeout:
                 print("WiFi connection timeout")
                 return False
             time.sleep(0.5)
-    
+
     print('WiFi connected:', wlan.ifconfig()[0])
     return True
+
 
 # Connect to WiFi BEFORE initializing anything else
 WIFI_SSID = "JFADeco_AD5C"
 WIFI_PASSWORD = "1234567890"
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 
-
-
-from machine import UART, Pin, I2C
-import time, struct, utime, _thread
-from lcd_api import LcdApi
-from i2c_lcd import I2cLcd
 
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
@@ -48,14 +51,20 @@ lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
 # Thread-safe LCD lock
 lcd_lock = _thread.allocate_lock()
 
+
 def show_message(line1="", line2="", line3="", line4=""):
     with lcd_lock:
         lcd.clear()
         time.sleep_ms(5)  # let LCD settle
-        lcd.move_to(0,0); lcd.putstr(line1[:20])
-        lcd.move_to(0,1); lcd.putstr(line2[:20])
-        lcd.move_to(0,2); lcd.putstr(line3[:20])
-        lcd.move_to(0,3); lcd.putstr(line4[:20])
+        lcd.move_to(0, 0)
+        lcd.putstr(line1[:20])
+        lcd.move_to(0, 1)
+        lcd.putstr(line2[:20])
+        lcd.move_to(0, 2)
+        lcd.putstr(line3[:20])
+        lcd.move_to(0, 3)
+        lcd.putstr(line4[:20])
+
 
 # -------------------- GPS Setup --------------------
 try:
@@ -67,93 +76,98 @@ except:
     gps_enabled = False
     print("GPS: Not detected")
 
-gps_data = {'utc_time':'','date':'','latitude':'','longitude':'',
-            'altitude':'','speed':'','course':'','fix_status':'','fix_quality':'','satellites':'',
+gps_data = {'utc_time': '', 'date': '', 'latitude': '', 'longitude': '',
+            'altitude': '', 'speed': '', 'course': '', 'fix_status': '', 'fix_quality': '', 'satellites': '',
             'raw_latitude': 0.0, 'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed': 0.0}
+
 
 def convert_coord(coord, direction):
     """Convert NMEA coordinate format to decimal degrees"""
     try:
         if not coord or not direction:
             return "0.0"
-            
+
         val = float(coord)
         if val == 0:
             return "0.0"
-            
+
         degrees = int(val // 100)
         minutes = val - (degrees * 100)
-        
+
         if minutes >= 60:
             return "0.0"
-            
+
         decimal = degrees + (minutes / 60)
-        
+
         if direction.upper() in ['S', 'W']:
             decimal = -decimal
-            
+
         return str(round(decimal, 6))
-        
+
     except:
         return "0.0"
+
 
 def convert_coord_raw(coord, direction):
     """Convert NMEA coordinate format to raw decimal degrees (float)"""
     try:
         if not coord or not direction:
             return 0.0
-            
+
         val = float(coord)
         if val == 0:
             return 0.0
-            
+
         degrees = int(val // 100)
         minutes = val - (degrees * 100)
-        
+
         if minutes >= 60:
             return 0.0
-            
+
         decimal = degrees + (minutes / 60)
-        
+
         if direction.upper() in ['S', 'W']:
             decimal = -decimal
-            
+
         return round(decimal, 6)
-        
+
     except:
         return 0.0
-    
+
+
 def parse_nmea(sentence):
     """Parse NMEA sentence"""
     try:
         if not sentence or not sentence.startswith('$'):
             return
-            
+
         sentence = sentence.strip()
         if '*' in sentence:
             sentence = sentence.split('*')[0]
-        
+
         parts = sentence.split(',')
         if len(parts) < 3:
             return
-            
+
         sentence_type = parts[0][1:]
-        
+
         if sentence_type == 'GPGGA' and len(parts) >= 15:
             if parts[1] and len(parts[1]) >= 6:
                 gps_data['utc_time'] = parts[1][:6]
-            
+
             if parts[2] and parts[3]:
                 gps_data['latitude'] = convert_coord(parts[2], parts[3])
-                gps_data['raw_latitude'] = convert_coord_raw(parts[2], parts[3])
-            
+                gps_data['raw_latitude'] = convert_coord_raw(
+                    parts[2], parts[3])
+
             if parts[4] and parts[5]:
                 gps_data['longitude'] = convert_coord(parts[4], parts[5])
-                gps_data['raw_longitude'] = convert_coord_raw(parts[4], parts[5])
-            
+                gps_data['raw_longitude'] = convert_coord_raw(
+                    parts[4], parts[5])
+
             gps_data['fix_quality'] = parts[6] if parts[6] else '0'
             gps_data['satellites'] = parts[7] if parts[7] else '0'
-            
+
             if parts[9]:
                 try:
                     alt = float(parts[9])
@@ -162,9 +176,9 @@ def parse_nmea(sentence):
                 except:
                     gps_data['altitude'] = "0.0 m"
                     gps_data['raw_altitude'] = 0.0
-            
+
             gps_data['fix_status'] = "Active" if parts[6] != '0' and parts[6] != '' else "No Fix"
-            
+
         elif sentence_type == 'GPRMC' and len(parts) >= 12:
             if parts[2] == 'A':
                 if parts[9] and len(parts[9]) == 6:
@@ -179,15 +193,16 @@ def parse_nmea(sentence):
                         gps_data['raw_speed'] = 0.0
                 if parts[8]:
                     gps_data['course'] = parts[8]
-                        
+
     except Exception as e:
         print("NMEA parse error:", e)
+
 
 def read_gps():
     """Read and parse GPS data (non-blocking)"""
     if not gps_enabled or not gps:
         return False
-    
+
     try:
         if gps.any():
             data = gps.read()
@@ -199,7 +214,7 @@ def read_gps():
                         text = data.decode('latin-1')
                     except:
                         return False
-                
+
                 lines = text.split('\n')
                 for line in lines:
                     sentence = line.strip()
@@ -208,14 +223,16 @@ def read_gps():
                 return True
     except Exception as e:
         print("GPS read error:", e)
-    
+
     return False
+
 
 def display_gps_data():
     print("Time:", gps_data['utc_time'], "Date:", gps_data['date'])
     print("Lat:", gps_data['latitude'], "Lon:", gps_data['longitude'])
     print("Alt:", gps_data['altitude'], "Speed:", gps_data['speed'])
     print("Fix:", gps_data['fix_status'], "Sats:", gps_data['satellites'])
+
 
 # -------------------- MPU6050 Setup --------------------
 MPU_ADDR = 0x68
@@ -230,19 +247,23 @@ mpu_latest = {
     "temp": 0.0
 }
 
-def mpu_write(reg, data): 
+
+def mpu_write(reg, data):
     with mpu_lock:
         i2c_bus.writeto_mem(MPU_ADDR, reg, bytes([data]))
-        
-def mpu_read(reg, n=1): 
+
+
+def mpu_read(reg, n=1):
     with mpu_lock:
         return i2c_bus.readfrom_mem(MPU_ADDR, reg, n)
+
 
 if mpu_enabled:
     mpu_write(0x6B, 0)
     print("MPU6050: Initialized")
-else: 
+else:
     print("MPU6050: Not detected")
+
 
 def read_mpu():
     global mpu_latest
@@ -256,14 +277,17 @@ def read_mpu():
     }
     return mpu_latest
 
+
 # -------------------- Keypad Setup --------------------
 row_pins = [13, 12, 14, 27]
 col_pins = [26, 25, 23, 32]
 rows = [Pin(pin, Pin.OUT) for pin in row_pins]
 cols = [Pin(pin, Pin.IN, Pin.PULL_DOWN) for pin in col_pins]
-key_map = [['1','2','3','A'], ['4','5','6','B'], ['7','8','9','C'], ['*','0','#','D']]
+key_map = [['1', '2', '3', 'A'], ['4', '5', '6', 'B'],
+           ['7', '8', '9', 'C'], ['*', '0', '#', 'D']]
 last_key = None
 last_time = 0
+
 
 def scan_keypad():
     global last_key, last_time
@@ -280,32 +304,38 @@ def scan_keypad():
         row.value(0)
     return None
 
+
 # -------------------- Global Variables --------------------
 current_status = "STANDBY"
 status_lock = _thread.allocate_lock()
+
 
 def set_status(new_status):
     global current_status
     with status_lock:
         current_status = new_status
 
+
 def get_status():
     with status_lock:
         return current_status
 
 # -------------------- API POST Function --------------------
+
+
 def send_sensor_data():
     """Send sensor data to API endpoint"""
     try:
         # Get current sensor readings
         ax, ay, az = mpu_latest["accel"]
         gx, gy, gz = mpu_latest["gyro"]
-        
+
         # Prepare JSON payload with real sensor data
         payload = {
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
-            "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,  # Approximate signal strength
+            # Approximate signal strength
+            "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,
             "Svid": int(gps_data.get('satellites', '0')) if gps_data.get('satellites', '0').isdigit() else 0,
             "SvElevationDegrees": 35.2,  # This would need actual GPS satellite data
             "SvAzimuthDegrees": 120.8,   # This would need actual GPS satellite data
@@ -321,28 +351,127 @@ def send_sensor_data():
             "raw_altitude": gps_data['raw_altitude'],
             "speed": gps_data['raw_speed']
         }
-        
+
         # Convert to JSON
         json_data = ujson.dumps(payload)
-        
+
         print("Sending data to API...")
         print("Payload:", json_data)
-        
+
         # Send POST request
         headers = {'Content-Type': 'application/json'}
-        response = urequests.post(API_ENDPOINT, data=json_data, headers=headers)
-        
+        response = urequests.post(
+            API_ENDPOINT, data=json_data, headers=headers)
+
         print("Response status:", response.status_code)
         print("Response:", response.text)
-        
+
         response.close()
         return True
-        
+
     except Exception as e:
         print("API POST error:", e)
         return False
 
+# -------------------- Vehicle Status/Help API (Keypad-driven) --------------------
+
+
+def post_vehicle_status(key):
+    """POST /vehicles/status/device/{device_id} with body {"key": key}"""
+    try:
+        # Encode device_id for URL path (handle spaces)
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/status/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+        body = ujson.dumps({"key": key})
+        resp = urequests.post(url, data=body, headers=headers)
+        print("Status POST:", resp.status_code)
+        try:
+            print("Status Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("Status POST error:", e)
+        return False
+
+
+def post_help_request(message=""):
+    """POST /vehicles/help-request/device/{device_id} with body {"message": message}"""
+    try:
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/help-request/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+        body = ujson.dumps({"message": message})
+        resp = urequests.post(url, data=body, headers=headers)
+        print("Help POST:", resp.status_code)
+        try:
+            print("Help Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("Help POST error:", e)
+        return False
+
+
+def post_bound_for(key):
+    """POST /vehicles/bound-for/device/{device_id} with body {"key": key} (6=IGPIT, 7=BUGO)"""
+    try:
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/bound-for/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+        body = ujson.dumps({"key": key})
+        resp = urequests.post(url, data=body, headers=headers)
+        print("Bound-for POST:", resp.status_code)
+        try:
+            print("Bound-for Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("Bound-for POST error:", e)
+        return False
+
+
+def post_iot_key(key, message=None):
+    """POST unified keypad endpoint /vehicles/iot/device/{device_id} with body {"key": <key>[, "message": str]}"""
+    try:
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/iot/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+
+        # Convert numeric keys to integers where appropriate per backend guidance
+        key_value = key
+        if key in ('1', '2', '4', '5', '6', '7'):
+            try:
+                key_value = int(key)
+            except Exception:
+                key_value = key  # fallback to string
+
+        body_obj = {"key": key_value}
+        if message is not None and message != "":
+            body_obj["message"] = message
+
+        body = ujson.dumps(body_obj)
+        resp = urequests.post(url, data=body, headers=headers)
+        print("IOT POST:", resp.status_code)
+        try:
+            print("IOT Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("IOT POST error:", e)
+        return False
+
 # -------------------- MPU Thread Function --------------------
+
+
 def mpu_thread():
     print("MPU thread started")
     while True:
@@ -357,6 +486,7 @@ def mpu_thread():
             except Exception as e:
                 print("MPU error:", e)
         time.sleep(2)
+
 
 # -------------------- Initialization --------------------
 print("System Running...")
@@ -380,11 +510,11 @@ last_api_post = 0
 while True:
     loop_count += 1
     current_time = time.time()
-    
+
     # Read GPS data in main loop
     if gps_enabled:
         read_gps()
-        
+
         # Display GPS info every 5 seconds
         if current_time - last_gps_display >= 5:
             sats = gps_data.get('satellites', '0')
@@ -393,7 +523,7 @@ while True:
             else:
                 print("GPS: Searching... Sats:", sats)
             last_gps_display = current_time
-    
+
     # Send data to API every POST_INTERVAL seconds
     if current_time - last_api_post >= POST_INTERVAL:
         if gps_data.get('fix_status') == "Active":  # Only send when GPS has fix
@@ -401,34 +531,45 @@ while True:
         else:
             print("Skipping API post - waiting for GPS fix")
         last_api_post = current_time
-    
+
     # Keypad input
     key = scan_keypad()
     if key:
-        if key == '1': 
+        if key == '1':
             set_status("FULL")
-        elif key == '2': 
+            post_iot_key('1')
+        elif key == '2':
             set_status("AVAILABLE")
-        elif key == 'A': 
+            post_iot_key('2')
+        elif key == 'A':
             set_status("STANDING")
-        elif key == '4': 
+            post_iot_key('A')
+        elif key == '4':
             set_status("INACTIVE")
-        elif key == '5': 
+            post_iot_key('4')
+        elif key == '5':
             set_status("HELP REQUESTED")
-        else: 
+            post_iot_key('5', "")
+        elif key == '6':
+            set_status("BOUND FOR IGPIT")
+            post_iot_key('6')
+        elif key == '7':
+            set_status("BOUND FOR BUGO")
+            post_iot_key('7')
+        else:
             set_status("INVALID")
-        
+
         current_status = get_status()
         show_message("STATUS:", current_status)
         print("Key:", key, "| Status:", current_status)
-    
+
     # Update display periodically
     if loop_count % 10 == 0:
         current_status = get_status()
         gps_sats = gps_data.get('satellites', '0')
         gps_fix = gps_data.get('fix_status', 'No Fix')
-        show_message("Bus Online", 
-                    "Status: " + current_status[:11], 
-                    "GPS: " + gps_fix[:8] + " S:" + gps_sats)
-    
+        show_message("Bus Online",
+                     "Status: " + current_status[:11],
+                     "GPS: " + gps_fix[:8] + " S:" + gps_sats)
+
     time.sleep(0.1)
