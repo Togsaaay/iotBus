@@ -37,7 +37,7 @@ from i2c_lcd import I2cLcd
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
 FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
-DEVICE_ID = "USTP"
+DEVICE_ID = "JANITH GWAPA"
 POST_INTERVAL = 60  # Send data every 5 seconds
 
 # -------------------- LCD Setup --------------------
@@ -319,7 +319,7 @@ def send_sensor_data():
             "raw_latitude": gps_data['raw_latitude'],
             "raw_longitude": gps_data['raw_longitude'],
             "raw_altitude": gps_data['raw_altitude'],
-            "Speed": gps_data['raw_speed']
+            "speed": gps_data['raw_speed']
         }
         
         # Convert to JSON
