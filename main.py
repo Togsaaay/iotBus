@@ -1,3 +1,9 @@
+from machine import UART, Pin, I2C
+from lcd_api import LcdApi
+from i2c_lcd import I2cLcd
+import struct
+import utime
+import _thread
 import network
 import time
 import urequests
@@ -26,16 +32,9 @@ def connect_wifi(ssid, password, timeout=10):
 
 
 # Connect to WiFi BEFORE initializing anything else
-WIFI_SSID = "JFADeco_AD5C"
-WIFI_PASSWORD = "1234567890"
+WIFI_SSID = "RideAlert-WiFi"
+WIFI_PASSWORD = "ride-alert05"
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
-
-import _thread
-import utime
-import struct
-from i2c_lcd import I2cLcd
-from lcd_api import LcdApi
-from machine import UART, Pin, I2C
 
 
 # -------------------- Configuration --------------------
@@ -533,9 +532,37 @@ while True:
             print("Skipping API post - waiting for GPS fix")
         last_api_post = current_time
 
-    # Keypad input
+    # ---------------- Keypad input (Instant LCD + API, ignores interval) ----------------
     key = scan_keypad()
     if key:
+        if key == '1':
+            set_status("FULL")
+            post_iot_key('1')
+        elif key == '2':
+            set_status("AVAILABLE")
+            post_iot_key('2')
+        elif key == 'A':
+            set_status("STANDING")
+            post_iot_key('A')
+        elif key == '4':
+            set_status("INACTIVE")
+            post_iot_key('4')
+        elif key == '5':
+            set_status("HELP REQUESTED")
+            post_iot_key('5', "")
+        elif key == '6':
+            set_status("BOUND FOR IGPIT")
+            post_iot_key('6')
+        elif key == '7':
+            set_status("BOUND FOR BUGO")
+            post_iot_key('7')
+        else:
+            set_status("INVALID")
+
+        # Instant LCD update
+        current_status = get_status()
+        show_message("STATUS:", current_status)
+        print("Key:", key, "| Status:", current_status)
         if key == '1':
             set_status("FULL")
             post_iot_key('1')
