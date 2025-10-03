@@ -573,17 +573,17 @@ while True:
             set_status("STANDING")
             post_iot_key('A')
         elif key == '4':
-            set_status("INACTIVE")
+            set_status("UNAVAILABLE")
             post_iot_key('4')
         elif key == '5':
             set_status("HELP REQUESTED")
             post_iot_key('5', "")
-        elif key == '6':
-            set_status("BOUND FOR IGPIT")
-            post_iot_key('6')
-        elif key == '7':
-            set_status("BOUND FOR BUGO")
-            post_iot_key('7')
+        elif key == 'B':
+            set_status("IGPIT")
+            post_iot_key('B')
+        elif key == 'C':
+            set_status("BUGO")
+            post_iot_key('C')
         else:
             set_status("INVALID")
 
