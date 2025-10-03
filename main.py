@@ -1,9 +1,3 @@
-import _thread
-import utime
-import struct
-from i2c_lcd import I2cLcd
-from lcd_api import LcdApi
-from machine import UART, Pin, I2C
 import network
 import time
 import urequests
@@ -35,6 +29,13 @@ def connect_wifi(ssid, password, timeout=10):
 WIFI_SSID = "JFADeco_AD5C"
 WIFI_PASSWORD = "1234567890"
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
+
+import _thread
+import utime
+import struct
+from i2c_lcd import I2cLcd
+from lcd_api import LcdApi
+from machine import UART, Pin, I2C
 
 
 # -------------------- Configuration --------------------
