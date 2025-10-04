@@ -186,10 +186,11 @@ def parse_nmea(sentence):
                 if parts[7]:
                     try:
                         speed_kmh = float(parts[7]) * 1.852
-                        gps_data['speed'] = str(round(speed_kmh, 1)) + " km/h"
-                        gps_data['raw_speed'] = round(speed_kmh, 1)
+                        speed_mps = speed_kmh / 3.6  # Convert km/h to m/s
+                        gps_data['speed'] = str(round(speed_mps, 2)) + " m/s"
+                        gps_data['raw_speed'] = round(speed_mps, 2)
                     except:
-                        gps_data['speed'] = "0.0 km/h"
+                        gps_data['speed'] = "0.0 m/s"
                         gps_data['raw_speed'] = 0.0
                 if parts[8]:
                     gps_data['course'] = parts[8]
@@ -349,7 +350,7 @@ def send_sensor_data():
             "raw_latitude": gps_data['raw_latitude'],
             "raw_longitude": gps_data['raw_longitude'],
             "raw_altitude": gps_data['raw_altitude'],
-            "speed": gps_data['raw_speed']
+            "SpeedMps": gps_data['raw_speed']
         }
 
         # Convert to JSON
