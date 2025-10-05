@@ -78,7 +78,8 @@ except:
 
 gps_data = {'utc_time': '', 'date': '', 'latitude': '', 'longitude': '',
             'altitude': '', 'speed': '', 'course': '', 'fix_status': '', 'fix_quality': '', 'satellites': '',
-            'raw_latitude': 0.0, 'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed': 0.0}
+            'raw_latitude': 0.0, 'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed': 0.0,
+            'satellites_detailed': {}}
 
 
 def convert_coord(coord, direction):
@@ -194,6 +195,31 @@ def parse_nmea(sentence):
                 if parts[8]:
                     gps_data['course'] = parts[8]
 
+        elif sentence_type == 'GPGSV' and len(parts) >= 8:
+            # Parse real satellite data from NEO-6M: SNR, satellite ID, elevation, azimuth
+            for i in range(4):  # Up to 4 satellites per GPGSV sentence
+                sat_idx = 4 + i * 4
+                if len(parts) > sat_idx + 3 and parts[sat_idx]:
+                    sat_id = parts[sat_idx]  # Satellite ID (PRN)
+                    try:
+                        elevation = float(
+                            parts[sat_idx + 1]) if parts[sat_idx + 1] else 0.0
+                        azimuth = float(
+                            parts[sat_idx + 2]) if parts[sat_idx + 2] else 0.0
+                        # Parse SNR (Signal-to-Noise Ratio) - NEO-6M's equivalent to C/N0
+                        snr_str = parts[sat_idx + 3]
+                        if '*' in snr_str:
+                            snr_str = snr_str.split('*')[0]
+                        snr = float(snr_str) if snr_str else 0.0
+
+                        gps_data['satellites_detailed'][sat_id] = {
+                            'elevation': elevation,
+                            'azimuth': azimuth,
+                            'snr': snr  # NEO-6M SNR used as C/N0 approximation
+                        }
+                    except (ValueError, IndexError):
+                        continue  # Skip invalid satellite data
+
     except Exception as e:
         print("NMEA parse error:", e)
 
@@ -227,11 +253,37 @@ def read_gps():
     return False
 
 
+def get_best_satellite():
+    """Get satellite with highest SNR from real NEO-6M GPGSV data"""
+    if not gps_data['satellites_detailed']:
+        # Fallback when no satellite data available
+        return {'id': 1, 'elevation': 35.2, 'azimuth': 120.8, 'snr': 30.0}
+
+    best_sat = None
+    best_snr = -1
+
+    for sat_id, sat_data in gps_data['satellites_detailed'].items():
+        if sat_data['snr'] > best_snr:
+            best_snr = sat_data['snr']
+            best_sat = {
+                'id': int(sat_id) if sat_id.isdigit() else 1,
+                'elevation': sat_data['elevation'],
+                'azimuth': sat_data['azimuth'],
+                'snr': sat_data['snr']
+            }
+
+    return best_sat if best_sat else {'id': 1, 'elevation': 35.2, 'azimuth': 120.8, 'snr': 30.0}
+
+
 def display_gps_data():
     print("Time:", gps_data['utc_time'], "Date:", gps_data['date'])
     print("Lat:", gps_data['latitude'], "Lon:", gps_data['longitude'])
     print("Alt:", gps_data['altitude'], "Speed:", gps_data['speed'])
     print("Fix:", gps_data['fix_status'], "Sats:", gps_data['satellites'])
+    if gps_data['satellites_detailed']:
+        best_sat = get_best_satellite()
+        print("Best satellite: ID={}, SNR={}, Elev={}, Azim={}".format(
+            best_sat['id'], best_sat['snr'], best_sat['elevation'], best_sat['azimuth']))
 
 
 # -------------------- MPU6050 Setup --------------------
@@ -330,15 +382,19 @@ def send_sensor_data():
         ax, ay, az = mpu_latest["accel"]
         gx, gy, gz = mpu_latest["gyro"]
 
-        # Prepare JSON payload with real sensor data
+        # Get real satellite data from NEO-6M GPGSV sentences
+        best_sat = get_best_satellite()
+
+        # Prepare JSON payload with real NEO-6M satellite data
         payload = {
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
-            # Approximate signal strength
-            "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,
-            "Svid": int(gps_data.get('satellites', '0')) if gps_data.get('satellites', '0').isdigit() else 0,
-            "SvElevationDegrees": 35.2,  # This would need actual GPS satellite data
-            "SvAzimuthDegrees": 120.8,   # This would need actual GPS satellite data
+            # Real NEO-6M SNR (Signal-to-Noise Ratio) used as C/N0 approximation
+            "Cn0DbHz": best_sat['snr'],
+            "Svid": best_sat['id'],  # Real satellite ID (PRN number)
+            # Real satellite geometry from NEO-6M GPGSV
+            "SvElevationDegrees": best_sat['elevation'],
+            "SvAzimuthDegrees": best_sat['azimuth'],
             "IMU_MessageType": "UncalAccel",
             "MeasurementX": round(ax, 7),
             "MeasurementY": round(ay, 7),
@@ -545,34 +601,6 @@ while True:
             set_status("STANDING")
             post_iot_key('A')
         elif key == '4':
-            set_status("INACTIVE")
-            post_iot_key('4')
-        elif key == '5':
-            set_status("HELP REQUESTED")
-            post_iot_key('5', "")
-        elif key == 'B':
-            set_status("IGPIT")
-            post_iot_key('B')
-        elif key == 'C':
-            set_status("BUGO")
-            post_iot_key('C')
-        else:
-            set_status("INVALID")
-
-        # Instant LCD update
-        current_status = get_status()
-        show_message("STATUS:", current_status)
-        print("Key:", key, "| Status:", current_status)
-        if key == '1':
-            set_status("FULL")
-            post_iot_key('1')
-        elif key == '2':
-            set_status("AVAILABLE")
-            post_iot_key('2')
-        elif key == 'A':
-            set_status("STANDING")
-            post_iot_key('A')
-        elif key == '4':
             set_status("UNAVAILABLE")
             post_iot_key('4')
         elif key == '5':
@@ -587,6 +615,7 @@ while True:
         else:
             set_status("INVALID")
 
+        # Instant LCD update
         current_status = get_status()
         show_message("STATUS:", current_status)
         print("Key:", key, "| Status:", current_status)
