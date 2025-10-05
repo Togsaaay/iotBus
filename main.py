@@ -40,7 +40,7 @@ connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
 FLEET_ID = "68bee7eb753d0934fd57bdea"
-DEVICE_ID = "JANITH GWAPA"
+DEVICE_ID = "68e20f304073a18ae0f980b4"
 POST_INTERVAL = 7.5  # Send data every 5 seconds
 
 # -------------------- LCD Setup --------------------
