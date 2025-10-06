@@ -36,9 +36,9 @@ from i2c_lcd import I2cLcd
 
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
-FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
-DEVICE_ID = "JANITH GWAPA"
-POST_INTERVAL = 60  # Send data every 5 seconds
+FLEET_ID = "68bee7eb753d0934fd57bdea"
+DEVICE_ID = "68e20f304073a18ae0f980b4"
+POST_INTERVAL = 2  # Send data every 5 seconds
 
 # -------------------- LCD Setup --------------------
 I2C_ADDR = 0x27
@@ -67,9 +67,10 @@ except:
     gps_enabled = False
     print("GPS: Not detected")
 
-gps_data = {'utc_time':'','date':'','latitude':'','longitude':'',
-            'altitude':'','speed':'','course':'','fix_status':'','fix_quality':'','satellites':'',
-            'raw_latitude': 0.0, 'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed': 0.0}
+gps_data = {'utc_time': '', 'date': '', 'latitude': '', 'longitude': '',
+            'altitude': '', 'speed': '', 'course': '', 'fix_status': '', 'fix_quality': '', 'satellites': '',
+            'raw_latitude': 0.0, 'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed': 0.0,
+            'satellites_detailed': {}}
 
 def convert_coord(coord, direction):
     """Convert NMEA coordinate format to decimal degrees"""
@@ -128,32 +129,34 @@ def parse_nmea(sentence):
     try:
         if not sentence or not sentence.startswith('$'):
             return
-            
+
         sentence = sentence.strip()
         if '*' in sentence:
             sentence = sentence.split('*')[0]
-        
+
         parts = sentence.split(',')
         if len(parts) < 3:
             return
-            
+
         sentence_type = parts[0][1:]
-        
+
         if sentence_type == 'GPGGA' and len(parts) >= 15:
             if parts[1] and len(parts[1]) >= 6:
                 gps_data['utc_time'] = parts[1][:6]
-            
+
             if parts[2] and parts[3]:
                 gps_data['latitude'] = convert_coord(parts[2], parts[3])
-                gps_data['raw_latitude'] = convert_coord_raw(parts[2], parts[3])
-            
+                gps_data['raw_latitude'] = convert_coord_raw(
+                    parts[2], parts[3])
+
             if parts[4] and parts[5]:
                 gps_data['longitude'] = convert_coord(parts[4], parts[5])
-                gps_data['raw_longitude'] = convert_coord_raw(parts[4], parts[5])
-            
+                gps_data['raw_longitude'] = convert_coord_raw(
+                    parts[4], parts[5])
+
             gps_data['fix_quality'] = parts[6] if parts[6] else '0'
             gps_data['satellites'] = parts[7] if parts[7] else '0'
-            
+
             if parts[9]:
                 try:
                     alt = float(parts[9])
@@ -162,32 +165,61 @@ def parse_nmea(sentence):
                 except:
                     gps_data['altitude'] = "0.0 m"
                     gps_data['raw_altitude'] = 0.0
-            
+
             gps_data['fix_status'] = "Active" if parts[6] != '0' and parts[6] != '' else "No Fix"
-            
+
         elif sentence_type == 'GPRMC' and len(parts) >= 12:
             if parts[2] == 'A':
                 if parts[9] and len(parts[9]) == 6:
                     gps_data['date'] = parts[9]
                 if parts[7]:
                     try:
-                        speed_kmh = float(parts[7]) * 1.852
-                        gps_data['speed'] = str(round(speed_kmh, 1)) + " km/h"
-                        gps_data['raw_speed'] = round(speed_kmh, 1)
+                        # GPS speed is in knots
+                        # OLD: speed_kmh = float(parts[7]) * 1.852
+                        # NEW: Convert knots to m/s directly (1 knot = 0.514444 m/s)
+                        speed_mps = float(parts[7]) * 0.514444
+                        gps_data['speed'] = str(round(speed_mps, 2)) + " m/s"
+                        gps_data['raw_speed'] = round(speed_mps, 2)
                     except:
-                        gps_data['speed'] = "0.0 km/h"
+                        gps_data['speed'] = "0.0 m/s"
                         gps_data['raw_speed'] = 0.0
                 if parts[8]:
                     gps_data['course'] = parts[8]
-                        
+
+        elif sentence_type == 'GPGSV' and len(parts) >= 8:
+            # Parse real satellite data from NEO-6M: SNR, satellite ID, elevation, azimuth
+            for i in range(4):  # Up to 4 satellites per GPGSV sentence
+                sat_idx = 4 + i * 4
+                if len(parts) > sat_idx + 3 and parts[sat_idx]:
+                    sat_id = parts[sat_idx]  # Satellite ID (PRN)
+                    try:
+                        elevation = float(
+                            parts[sat_idx + 1]) if parts[sat_idx + 1] else 0.0
+                        azimuth = float(
+                            parts[sat_idx + 2]) if parts[sat_idx + 2] else 0.0
+                        # Parse SNR (Signal-to-Noise Ratio) - NEO-6M's equivalent to C/N0
+                        snr_str = parts[sat_idx + 3]
+                        if '*' in snr_str:
+                            snr_str = snr_str.split('*')[0]
+                        snr = float(snr_str) if snr_str else 0.0
+
+                        gps_data['satellites_detailed'][sat_id] = {
+                            'elevation': elevation,
+                            'azimuth': azimuth,
+                            'snr': snr  # NEO-6M SNR used as C/N0 approximation
+                        }
+                    except (ValueError, IndexError):
+                        continue  # Skip invalid satellite data
+
     except Exception as e:
         print("NMEA parse error:", e)
+
 
 def read_gps():
     """Read and parse GPS data (non-blocking)"""
     if not gps_enabled or not gps:
         return False
-    
+
     try:
         if gps.any():
             data = gps.read()
@@ -199,7 +231,7 @@ def read_gps():
                         text = data.decode('latin-1')
                     except:
                         return False
-                
+
                 lines = text.split('\n')
                 for line in lines:
                     sentence = line.strip()
@@ -208,14 +240,41 @@ def read_gps():
                 return True
     except Exception as e:
         print("GPS read error:", e)
-    
+
     return False
+
+
+def get_best_satellite():
+    """Get satellite with highest SNR from real NEO-6M GPGSV data"""
+    if not gps_data['satellites_detailed']:
+        # Fallback when no satellite data available
+        return {'id': 1, 'elevation': 35.2, 'azimuth': 120.8, 'snr': 30.0}
+
+    best_sat = None
+    best_snr = -1
+
+    for sat_id, sat_data in gps_data['satellites_detailed'].items():
+        if sat_data['snr'] > best_snr:
+            best_snr = sat_data['snr']
+            best_sat = {
+                'id': int(sat_id) if sat_id.isdigit() else 1,
+                'elevation': sat_data['elevation'],
+                'azimuth': sat_data['azimuth'],
+                'snr': sat_data['snr']
+            }
+
+    return best_sat if best_sat else {'id': 1, 'elevation': 35.2, 'azimuth': 120.8, 'snr': 30.0}
+
 
 def display_gps_data():
     print("Time:", gps_data['utc_time'], "Date:", gps_data['date'])
     print("Lat:", gps_data['latitude'], "Lon:", gps_data['longitude'])
     print("Alt:", gps_data['altitude'], "Speed:", gps_data['speed'])
     print("Fix:", gps_data['fix_status'], "Sats:", gps_data['satellites'])
+    if gps_data['satellites_detailed']:
+        best_sat = get_best_satellite()
+        print("Best satellite: ID={}, SNR={}, Elev={}, Azim={}".format(
+            best_sat['id'], best_sat['snr'], best_sat['elevation'], best_sat['azimuth']))
 
 # -------------------- MPU6050 Setup --------------------
 MPU_ADDR = 0x68
@@ -300,15 +359,19 @@ def send_sensor_data():
         # Get current sensor readings
         ax, ay, az = mpu_latest["accel"]
         gx, gy, gz = mpu_latest["gyro"]
+
+        best_sat = get_best_satellite()
         
         # Prepare JSON payload with real sensor data
         payload = {
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
-            "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,  # Approximate signal strength
-            "Svid": int(gps_data.get('satellites', '0')) if gps_data.get('satellites', '0').isdigit() else 0,
-            "SvElevationDegrees": 35.2,  # This would need actual GPS satellite data
-            "SvAzimuthDegrees": 120.8,   # This would need actual GPS satellite data
+            # Real NEO-6M SNR (Signal-to-Noise Ratio) used as C/N0 approximation
+            "Cn0DbHz": best_sat['snr'],
+            "Svid": best_sat['id'],  # Real satellite ID (PRN number)
+            # Real satellite geometry from NEO-6M GPGSV
+            "SvElevationDegrees": best_sat['elevation'],
+            "SvAzimuthDegrees": best_sat['azimuth'],
             "IMU_MessageType": "UncalAccel",
             "MeasurementX": round(ax, 7),
             "MeasurementY": round(ay, 7),
@@ -341,6 +404,100 @@ def send_sensor_data():
     except Exception as e:
         print("API POST error:", e)
         return False
+
+
+def post_vehicle_status(key):
+    """POST /vehicles/status/device/{device_id} with body {"key": key}"""
+    try:
+        # Encode device_id for URL path (handle spaces)
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/status/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+        body = ujson.dumps({"key": key})
+        resp = urequests.post(url, data=body, headers=headers)
+        print("Status POST:", resp.status_code)
+        try:
+            print("Status Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("Status POST error:", e)
+        return False
+
+def post_help_request(message=""):
+    """POST /vehicles/help-request/device/{device_id} with body {"message": message}"""
+    try:
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/help-request/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+        body = ujson.dumps({"message": message})
+        resp = urequests.post(url, data=body, headers=headers)
+        print("Help POST:", resp.status_code)
+        try:
+            print("Help Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("Help POST error:", e)
+        return False
+
+
+def post_bound_for(key):
+    """POST /vehicles/bound-for/device/{device_id} with body {"key": key} (6=IGPIT, 7=BUGO)"""
+    try:
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/bound-for/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+        body = ujson.dumps({"key": key})
+        resp = urequests.post(url, data=body, headers=headers)
+        print("Bound-for POST:", resp.status_code)
+        try:
+            print("Bound-for Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("Bound-for POST error:", e)
+        return False
+
+
+def post_iot_key(key, message=None):
+    """POST unified keypad endpoint /vehicles/iot/device/{device_id} with body {"key": <key>[, "message": str]}"""
+    try:
+        device_id_path = DEVICE_ID.replace(' ', '%20')
+        url = "https://ridealert-backend.onrender.com/vehicles/iot/device/" + device_id_path
+        headers = {'Content-Type': 'application/json'}
+
+        # Convert numeric keys to integers where appropriate per backend guidance
+        key_value = key
+        if key in ('1', '2', '4', '5', '6', '7'):
+            try:
+                key_value = int(key)
+            except Exception:
+                key_value = key  # fallback to string
+
+        body_obj = {"key": key_value}
+        if message is not None and message != "":
+            body_obj["message"] = message
+
+        body = ujson.dumps(body_obj)
+        resp = urequests.post(url, data=body, headers=headers)
+        print("IOT POST:", resp.status_code)
+        try:
+            print("IOT Response:", resp.text)
+        except Exception:
+            pass
+        resp.close()
+        return True
+    except Exception as e:
+        print("IOT POST error:", e)
+        return False
+    
 
 # -------------------- MPU Thread Function --------------------
 def mpu_thread():
@@ -405,17 +562,28 @@ while True:
     # Keypad input
     key = scan_keypad()
     if key:
-        if key == '1': 
+        if key == '1':
             set_status("FULL")
-        elif key == '2': 
+            post_iot_key('1')
+        elif key == '2':
             set_status("AVAILABLE")
-        elif key == 'A': 
+            post_iot_key('2')
+        elif key == 'A':
             set_status("STANDING")
-        elif key == '4': 
-            set_status("INACTIVE")
-        elif key == '5': 
+            post_iot_key('A')
+        elif key == '4':
+            set_status("UNAVAILABLE")
+            post_iot_key('4')
+        elif key == '5':
             set_status("HELP REQUESTED")
-        else: 
+            post_iot_key('5', "")
+        elif key == 'B':
+            set_status("IGPIT")
+            post_iot_key('B')
+        elif key == 'C':
+            set_status("BUGO")
+            post_iot_key('C')
+        else:
             set_status("INVALID")
         
         current_status = get_status()
