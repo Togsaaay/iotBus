@@ -39,9 +39,9 @@ connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
-FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
-DEVICE_ID = "JANITH GWAPA"
-POST_INTERVAL = 7.5  # Send data every 5 seconds
+FLEET_ID = "68bee7eb753d0934fd57bdea"
+DEVICE_ID = "68e20f304073a18ae0f980b4"
+POST_INTERVAL = 2  # Send data every 2 seconds
 
 # -------------------- LCD Setup --------------------
 I2C_ADDR = 0x27
@@ -186,11 +186,14 @@ def parse_nmea(sentence):
                     gps_data['date'] = parts[9]
                 if parts[7]:
                     try:
-                        speed_kmh = float(parts[7]) * 1.852
-                        gps_data['speed'] = str(round(speed_kmh, 1)) + " km/h"
-                        gps_data['raw_speed'] = round(speed_kmh, 1)
+                        # GPS speed is in knots
+                        # OLD: speed_kmh = float(parts[7]) * 1.852
+                        # NEW: Convert knots to m/s directly (1 knot = 0.514444 m/s)
+                        speed_mps = float(parts[7]) * 0.514444
+                        gps_data['speed'] = str(round(speed_mps, 2)) + " m/s"
+                        gps_data['raw_speed'] = round(speed_mps, 2)
                     except:
-                        gps_data['speed'] = "0.0 km/h"
+                        gps_data['speed'] = "0.0 m/s"
                         gps_data['raw_speed'] = 0.0
                 if parts[8]:
                     gps_data['course'] = parts[8]
