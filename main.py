@@ -8,6 +8,8 @@ import network
 import time
 import urequests
 import ujson
+import gc
+
 
 # -------------------- WiFi Setup (FIRST!) --------------------
 
@@ -379,7 +381,9 @@ def get_status():
 
 
 def send_sensor_data():
-    """Send sensor data to API endpoint"""
+    """Send sensor data to API endpoint (final stable + memory-safe version)"""
+    global loop_count
+
     try:
         # Get current sensor readings
         ax, ay, az = mpu_latest["accel"]
@@ -388,14 +392,12 @@ def send_sensor_data():
         # Get real satellite data from NEO-6M GPGSV sentences
         best_sat = get_best_satellite()
 
-        # Prepare JSON payload with real NEO-6M satellite data
+        # Prepare JSON payload
         payload = {
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
-            # Real NEO-6M SNR (Signal-to-Noise Ratio) used as C/N0 approximation
             "Cn0DbHz": best_sat['snr'],
-            "Svid": best_sat['id'],  # Real satellite ID (PRN number)
-            # Real satellite geometry from NEO-6M GPGSV
+            "Svid": best_sat['id'],
             "SvElevationDegrees": best_sat['elevation'],
             "SvAzimuthDegrees": best_sat['azimuth'],
             "IMU_MessageType": "UncalAccel",
@@ -411,25 +413,59 @@ def send_sensor_data():
             "speed": gps_data['raw_speed']
         }
 
-        # Convert to JSON
         json_data = ujson.dumps(payload)
 
         print("Sending data to API...")
         print("Payload:", json_data)
 
-        # Send POST request
-        headers = {'Content-Type': 'application/json'}
-        response = urequests.post(
-            API_ENDPOINT, data=json_data, headers=headers)
+        # --- Stable POST with socket close and cleanup ---
+        headers = {'Content-Type': 'application/json', 'Connection': 'close'}
+        resp = None
+        try:
+            resp = urequests.post(API_ENDPOINT, data=json_data, headers=headers)
+            print("Response status:", resp.status_code)
+            print("Response:", resp.text)
+        finally:
+            try:
+                if resp:
+                    resp.close()
+                    del resp
+            except Exception:
+                pass
+            gc.collect()
+            time.sleep_ms(300)  # slightly longer cooldown to prevent ECONNABORTED
 
-        print("Response status:", response.status_code)
-        print("Response:", response.text)
+        # --- Periodic maintenance every 200 posts ---
+        loop_count += 1
+        if loop_count >= 200:
+            print("Maintenance: memory + WiFi cleanup...")
+            gc.collect()
+            try:
+                wlan = network.WLAN(network.STA_IF)
+                if wlan.isconnected():
+                    wlan.disconnect()
+                    time.sleep(1)
+                time.sleep(2)
+                wlan.connect(WIFI_SSID, WIFI_PASS)
+                for _ in range(10):
+                    if wlan.isconnected():
+                        break
+                    time.sleep(0.5)
+                if wlan.isconnected():
+                    print("WiFi reconnected:", wlan.ifconfig()[0])
+                else:
+                    print("WiFi reconnect failed")
+            except Exception as e:
+                print("WiFi maintenance error:", e)
+            loop_count = 0
+            gc.collect()
 
-        response.close()
         return True
 
     except Exception as e:
         print("API POST error:", e)
+        gc.collect()
+        time.sleep_ms(200)
         return False
 
 # -------------------- Vehicle Status/Help API (Keypad-driven) --------------------
