@@ -446,7 +446,7 @@ def send_sensor_data():
                     wlan.disconnect()
                     time.sleep(1)
                 time.sleep(2)
-                wlan.connect(WIFI_SSID, WIFI_PASS)
+                wlan.connect(WIFI_SSID, WIFI_PASSWORD)
                 for _ in range(10):
                     if wlan.isconnected():
                         break
