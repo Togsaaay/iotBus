@@ -39,7 +39,7 @@ API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
 STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/status/device/"
 FLEET_ID = "68bee7eb753d0934fd57bdea"
 DEVICE_ID = "68e20f304073a18ae0f980b4"
-POST_INTERVAL = 60  # Send data every 60 seconds
+POST_INTERVAL = 5  # Send data every 60 seconds
 
 # -------------------- LCD Setup --------------------
 I2C_ADDR = 0x27
@@ -445,9 +445,9 @@ while True:
             set_status("INACTIVE")
         elif key == '5': 
             set_status("HELP REQUESTED")
-        elif key == 'C': 
+        elif key == '6': 
             set_status("BUGO")
-        elif key == 'B': 
+        elif key == '7': 
             set_status("IGPIT")
         else: 
             set_status("INVALID")
