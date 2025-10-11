@@ -23,8 +23,8 @@ def connect_wifi(ssid, password, timeout=10):
     return True
 
 # Connect to WiFi BEFORE initializing anything else
-WIFI_SSID = "JANNINE"
-WIFI_PASSWORD = "Isaiah6022!"
+WIFI_SSID = "RideAlert-WiFi"
+WIFI_PASSWORD = "ride-alert05"
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 
 
@@ -36,9 +36,10 @@ from i2c_lcd import I2cLcd
 
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
+STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/status/device/"
 FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
 DEVICE_ID = "USTP"
-POST_INTERVAL = 60  # Send data every 5 seconds
+POST_INTERVAL = 60  # Send data every 60 seconds
 
 # -------------------- LCD Setup --------------------
 I2C_ADDR = 0x27
@@ -293,7 +294,34 @@ def get_status():
     with status_lock:
         return current_status
 
-# -------------------- API POST Function --------------------
+# -------------------- API POST Functions --------------------
+def send_keypad_status(key):
+    """Send keypad press to status endpoint"""
+    try:
+        # Build the full URL with device ID
+        url = STATUS_ENDPOINT + DEVICE_ID
+        
+        # Prepare JSON payload
+        payload = {"key": key}
+        json_data = ujson.dumps(payload)
+        
+        print("Sending keypad status to:", url)
+        print("Payload:", json_data)
+        
+        # Send POST request
+        headers = {'Content-Type': 'application/json'}
+        response = urequests.post(url, data=json_data, headers=headers)
+        
+        print("Status Response:", response.status_code)
+        print("Response:", response.text)
+        
+        response.close()
+        return True
+        
+    except Exception as e:
+        print("Status API error:", e)
+        return False
+
 def send_sensor_data():
     """Send sensor data to API endpoint"""
     try:
@@ -305,10 +333,10 @@ def send_sensor_data():
         payload = {
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
-            "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,  # Approximate signal strength
+            "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,
             "Svid": int(gps_data.get('satellites', '0')) if gps_data.get('satellites', '0').isdigit() else 0,
-            "SvElevationDegrees": 35.2,  # This would need actual GPS satellite data
-            "SvAzimuthDegrees": 120.8,   # This would need actual GPS satellite data
+            "SvElevationDegrees": 35.2,
+            "SvAzimuthDegrees": 120.8,
             "IMU_MessageType": "UncalAccel",
             "MeasurementX": round(ax, 7),
             "MeasurementY": round(ay, 7),
@@ -322,13 +350,11 @@ def send_sensor_data():
             "Speed": gps_data['raw_speed']
         }
         
-        # Convert to JSON
         json_data = ujson.dumps(payload)
         
         print("Sending data to API...")
         print("Payload:", json_data)
         
-        # Send POST request
         headers = {'Content-Type': 'application/json'}
         response = urequests.post(API_ENDPOINT, data=json_data, headers=headers)
         
@@ -396,7 +422,7 @@ while True:
     
     # Send data to API every POST_INTERVAL seconds
     if current_time - last_api_post >= POST_INTERVAL:
-        if gps_data.get('fix_status') == "Active":  # Only send when GPS has fix
+        if gps_data.get('fix_status') == "Active":
             send_sensor_data()
         else:
             print("Skipping API post - waiting for GPS fix")
@@ -405,6 +431,10 @@ while True:
     # Keypad input
     key = scan_keypad()
     if key:
+        # Send keypad status to backend
+        send_keypad_status(key)
+        
+        # Update local status
         if key == '1': 
             set_status("FULL")
         elif key == '2': 
