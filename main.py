@@ -37,8 +37,8 @@ from i2c_lcd import I2cLcd
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
 STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/status/device/"
-FLEET_ID = "68b3e4d19f1c8d7ccdb6c991"
-DEVICE_ID = "USTP"
+FLEET_ID = "68bee7eb753d0934fd57bdea"
+DEVICE_ID = "68e20f304073a18ae0f980b4"
 POST_INTERVAL = 60  # Send data every 60 seconds
 
 # -------------------- LCD Setup --------------------
@@ -445,6 +445,10 @@ while True:
             set_status("INACTIVE")
         elif key == '5': 
             set_status("HELP REQUESTED")
+        elif key == 'C': 
+            set_status("BUGO")
+        elif key == 'B': 
+            set_status("IGPIT")
         else: 
             set_status("INVALID")
         
