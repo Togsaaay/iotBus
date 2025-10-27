@@ -36,10 +36,10 @@ from i2c_lcd import I2cLcd
 
 # -------------------- Configuration --------------------
 API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
-STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/status/device/"
+STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/iot/device/"
 FLEET_ID = "68bee7eb753d0934fd57bdea"
 DEVICE_ID = "68e20f304073a18ae0f980b4"
-POST_INTERVAL = 5  # Send data every 60 seconds
+POST_INTERVAL = 5  # Send data every 5 seconds
 
 # -------------------- LCD Setup --------------------
 I2C_ADDR = 0x27
@@ -285,6 +285,10 @@ def scan_keypad():
 current_status = "STANDBY"
 status_lock = _thread.allocate_lock()
 
+# Queue for keypad presses (thread-safe)
+keypad_queue = []
+keypad_queue_lock = _thread.allocate_lock()
+
 def set_status(new_status):
     global current_status
     with status_lock:
@@ -293,6 +297,18 @@ def set_status(new_status):
 def get_status():
     with status_lock:
         return current_status
+
+def add_keypad_to_queue(key):
+    """Add keypad press to queue for threaded processing"""
+    with keypad_queue_lock:
+        keypad_queue.append(key)
+
+def get_keypad_from_queue():
+    """Get keypad press from queue"""
+    with keypad_queue_lock:
+        if len(keypad_queue) > 0:
+            return keypad_queue.pop(0)
+    return None
 
 # -------------------- API POST Functions --------------------
 def send_keypad_status(key):
@@ -353,13 +369,11 @@ def send_sensor_data():
         json_data = ujson.dumps(payload)
         
         print("Sending data to API...")
-        print("Payload:", json_data)
         
         headers = {'Content-Type': 'application/json'}
         response = urequests.post(API_ENDPOINT, data=json_data, headers=headers)
         
-        print("Response status:", response.status_code)
-        print("Response:", response.text)
+        print("Sensor Response:", response.status_code)
         
         response.close()
         return True
@@ -368,8 +382,9 @@ def send_sensor_data():
         print("API POST error:", e)
         return False
 
-# -------------------- MPU Thread Function --------------------
+# -------------------- Thread Functions --------------------
 def mpu_thread():
+    """Background thread for reading MPU data"""
     print("MPU thread started")
     while True:
         if mpu_enabled:
@@ -384,6 +399,48 @@ def mpu_thread():
                 print("MPU error:", e)
         time.sleep(2)
 
+def sensor_post_thread():
+    """Background thread for posting sensor data"""
+    print("Sensor POST thread started")
+    last_post = 0
+    
+    while True:
+        try:
+            current_time = time.time()
+            
+            # Send data every POST_INTERVAL seconds
+            if current_time - last_post >= POST_INTERVAL:
+                if gps_data.get('fix_status') == "Active":
+                    send_sensor_data()
+                else:
+                    print("Skipping sensor post - waiting for GPS fix")
+                last_post = current_time
+            
+            time.sleep(1)  # Check every second
+            
+        except Exception as e:
+            print("Sensor POST thread error:", e)
+            time.sleep(5)
+
+def keypad_post_thread():
+    """Background thread for posting keypad status"""
+    print("Keypad POST thread started")
+    
+    while True:
+        try:
+            # Check if there's a keypad press in the queue
+            key = get_keypad_from_queue()
+            
+            if key:
+                print("Processing keypad press from queue:", key)
+                send_keypad_status(key)
+            
+            time.sleep(0.1)  # Check queue frequently
+            
+        except Exception as e:
+            print("Keypad POST thread error:", e)
+            time.sleep(1)
+
 # -------------------- Initialization --------------------
 print("System Running...")
 show_message("Bus Online", "Initializing...")
@@ -391,17 +448,28 @@ show_message("Bus Online", "Initializing...")
 print("Initialization complete!")
 show_message("Bus Online", "Monitoring...")
 
-# Start MPU background thread
+# Start all background threads
 try:
     _thread.start_new_thread(mpu_thread, ())
     print("MPU thread started")
 except Exception as e:
     print("Failed to start MPU thread:", e)
 
+try:
+    _thread.start_new_thread(sensor_post_thread, ())
+    print("Sensor POST thread started")
+except Exception as e:
+    print("Failed to start sensor POST thread:", e)
+
+try:
+    _thread.start_new_thread(keypad_post_thread, ())
+    print("Keypad POST thread started")
+except Exception as e:
+    print("Failed to start keypad POST thread:", e)
+
 # -------------------- Main Loop --------------------
 loop_count = 0
 last_gps_display = 0
-last_api_post = 0
 
 while True:
     loop_count += 1
@@ -420,21 +488,13 @@ while True:
                 print("GPS: Searching... Sats:", sats)
             last_gps_display = current_time
     
-    # Send data to API every POST_INTERVAL seconds
-    if current_time - last_api_post >= POST_INTERVAL:
-        if gps_data.get('fix_status') == "Active":
-            send_sensor_data()
-        else:
-            print("Skipping API post - waiting for GPS fix")
-        last_api_post = current_time
-    
-    # Keypad input
+    # Keypad input (non-blocking - just add to queue)
     key = scan_keypad()
     if key:
-        # Send keypad status to backend
-        send_keypad_status(key)
+        # Add to queue for background thread to process
+        add_keypad_to_queue(key)
         
-        # Update local status
+        # Update local status immediately
         if key == '1': 
             set_status("FULL")
         elif key == '2': 
@@ -445,9 +505,9 @@ while True:
             set_status("INACTIVE")
         elif key == '5': 
             set_status("HELP REQUESTED")
-        elif key == '6': 
+        elif key == 'B': 
             set_status("BUGO")
-        elif key == '7': 
+        elif key == 'C': 
             set_status("IGPIT")
         else: 
             set_status("INVALID")
