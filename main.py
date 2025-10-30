@@ -2,6 +2,47 @@ import network
 import time
 import urequests
 import ujson
+import ubinascii
+from ucryptolib import aes
+
+# -------------------- Encryption Setup --------------------
+# IMPORTANT: Keep this key secure
+ENCRYPTION_KEY = b'MySecureKey12345MySecureKey12345'  # Must be exactly 32 bytes for AES-256
+
+def pad_data(data):
+    """PKCS7 padding"""
+    padding_length = 16 - (len(data) % 16)
+    return data + bytes([padding_length] * padding_length)
+
+def encrypt_data(plaintext):
+    """Encrypt data using AES-256-CBC"""
+    try:
+        # Generate a simple IV based on time
+        import utime
+        ms = utime.ticks_ms()
+        iv_bytes = []
+        for i in range(16):
+            iv_bytes.append((ms >> (i * 2)) & 0xFF)
+        iv = bytes(iv_bytes)
+        
+        # Convert string to bytes if needed
+        if isinstance(plaintext, str):
+            plaintext = plaintext.encode('utf-8')
+        
+        # Pad the plaintext
+        padded = pad_data(plaintext)
+        
+        # Encrypt using AES CBC mode
+        cipher = aes(ENCRYPTION_KEY, 2, iv)  # mode 2 = CBC
+        encrypted = cipher.encrypt(padded)
+        
+        # Return IV + encrypted data, base64 encoded
+        combined = iv + encrypted
+        return ubinascii.b2a_base64(combined).decode('utf-8').strip()
+        
+    except Exception as e:
+        print("Encryption error:", e)
+        return None
 
 # -------------------- WiFi Setup (FIRST!) --------------------
 def connect_wifi(ssid, password, timeout=10):
@@ -27,8 +68,6 @@ WIFI_SSID = "RideAlert-WiFi"
 WIFI_PASSWORD = "ride-alert05"
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 
-
-
 from machine import UART, Pin, I2C
 import time, struct, utime, _thread
 from lcd_api import LcdApi
@@ -52,7 +91,7 @@ lcd_lock = _thread.allocate_lock()
 def show_message(line1="", line2="", line3="", line4=""):
     with lcd_lock:
         lcd.clear()
-        time.sleep_ms(5)  # let LCD settle
+        time.sleep_ms(5)
         lcd.move_to(0,0); lcd.putstr(line1[:20])
         lcd.move_to(0,1); lcd.putstr(line2[:20])
         lcd.move_to(0,2); lcd.putstr(line3[:20])
@@ -224,7 +263,6 @@ i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
 mpu_enabled = MPU_ADDR in i2c_bus.scan()
 mpu_lock = _thread.allocate_lock()
 
-# Store latest MPU data
 mpu_latest = {
     "accel": (0.0, 0.0, 0.0),
     "gyro": (0.0, 0.0, 0.0),
@@ -285,7 +323,6 @@ def scan_keypad():
 current_status = "STANDBY"
 status_lock = _thread.allocate_lock()
 
-# Queue for keypad presses (thread-safe)
 keypad_queue = []
 keypad_queue_lock = _thread.allocate_lock()
 
@@ -299,12 +336,10 @@ def get_status():
         return current_status
 
 def add_keypad_to_queue(key):
-    """Add keypad press to queue for threaded processing"""
     with keypad_queue_lock:
         keypad_queue.append(key)
 
 def get_keypad_from_queue():
-    """Get keypad press from queue"""
     with keypad_queue_lock:
         if len(keypad_queue) > 0:
             return keypad_queue.pop(0)
@@ -312,24 +347,31 @@ def get_keypad_from_queue():
 
 # -------------------- API POST Functions --------------------
 def send_keypad_status(key):
-    """Send keypad press to status endpoint"""
+    """Send ENCRYPTED keypad press to status endpoint"""
     try:
-        # Build the full URL with device ID
         url = STATUS_ENDPOINT + DEVICE_ID
         
-        # Prepare JSON payload
+        # Prepare payload
         payload = {"key": key}
         json_data = ujson.dumps(payload)
         
-        print("Sending keypad status to:", url)
-        print("Payload:", json_data)
+        # Encrypt the entire payload
+        encrypted_data = encrypt_data(json_data)
         
-        # Send POST request
+        if not encrypted_data:
+            print("Encryption failed")
+            return False
+        
+        # Send as encrypted string
+        encrypted_payload = {"encrypted_data": encrypted_data}
+        
+        print("Sending encrypted keypad status...")
+        print("Encrypted:", encrypted_data[:50] + "...")  # Show first 50 chars
+        
         headers = {'Content-Type': 'application/json'}
-        response = urequests.post(url, data=json_data, headers=headers)
+        response = urequests.post(url, data=ujson.dumps(encrypted_payload), headers=headers)
         
         print("Status Response:", response.status_code)
-        print("Response:", response.text)
         
         response.close()
         return True
@@ -339,13 +381,12 @@ def send_keypad_status(key):
         return False
 
 def send_sensor_data():
-    """Send sensor data to API endpoint"""
+    """Send ENCRYPTED sensor data to API endpoint"""
     try:
-        # Get current sensor readings
         ax, ay, az = mpu_latest["accel"]
         gx, gy, gz = mpu_latest["gyro"]
         
-        # Prepare JSON payload with real sensor data
+        # Prepare sensor payload
         payload = {
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
@@ -368,10 +409,21 @@ def send_sensor_data():
         
         json_data = ujson.dumps(payload)
         
-        print("Sending data to API...")
+        # Encrypt the entire payload
+        encrypted_data = encrypt_data(json_data)
+        
+        if not encrypted_data:
+            print("Encryption failed")
+            return False
+        
+        # Send as encrypted string
+        encrypted_payload = {"encrypted_data": encrypted_data}
+        
+        print("Sending encrypted sensor data...")
+        print("Encrypted:", encrypted_data[:50] + "...")  # Show first 50 chars
         
         headers = {'Content-Type': 'application/json'}
-        response = urequests.post(API_ENDPOINT, data=json_data, headers=headers)
+        response = urequests.post(API_ENDPOINT, data=ujson.dumps(encrypted_payload), headers=headers)
         
         print("Sensor Response:", response.status_code)
         
@@ -408,7 +460,6 @@ def sensor_post_thread():
         try:
             current_time = time.time()
             
-            # Send data every POST_INTERVAL seconds
             if current_time - last_post >= POST_INTERVAL:
                 if gps_data.get('fix_status') == "Active":
                     send_sensor_data()
@@ -416,7 +467,7 @@ def sensor_post_thread():
                     print("Skipping sensor post - waiting for GPS fix")
                 last_post = current_time
             
-            time.sleep(1)  # Check every second
+            time.sleep(1)
             
         except Exception as e:
             print("Sensor POST thread error:", e)
@@ -428,14 +479,13 @@ def keypad_post_thread():
     
     while True:
         try:
-            # Check if there's a keypad press in the queue
             key = get_keypad_from_queue()
             
             if key:
                 print("Processing keypad press from queue:", key)
                 send_keypad_status(key)
             
-            time.sleep(0.1)  # Check queue frequently
+            time.sleep(0.1)
             
         except Exception as e:
             print("Keypad POST thread error:", e)
@@ -475,11 +525,9 @@ while True:
     loop_count += 1
     current_time = time.time()
     
-    # Read GPS data in main loop
     if gps_enabled:
         read_gps()
         
-        # Display GPS info every 5 seconds
         if current_time - last_gps_display >= 5:
             sats = gps_data.get('satellites', '0')
             if gps_data.get('fix_status') == "Active":
@@ -488,13 +536,10 @@ while True:
                 print("GPS: Searching... Sats:", sats)
             last_gps_display = current_time
     
-    # Keypad input (non-blocking - just add to queue)
     key = scan_keypad()
     if key:
-        # Add to queue for background thread to process
         add_keypad_to_queue(key)
         
-        # Update local status immediately
         if key == '1': 
             set_status("FULL")
         elif key == '2': 
@@ -516,7 +561,6 @@ while True:
         show_message("STATUS:", current_status)
         print("Key:", key, "| Status:", current_status)
     
-    # Update display periodically
     if loop_count % 10 == 0:
         current_status = get_status()
         gps_sats = gps_data.get('satellites', '0')
