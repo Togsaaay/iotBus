@@ -4,10 +4,11 @@ import urequests
 import ujson
 import ubinascii
 from ucryptolib import aes
+from machine import Pin  # Import Pin at the top
+from config import WIFI_SSID, WIFI_PASSWORD, ENCRYPTION_KEY, FLEET_ID, DEVICE_ID
 
-# -------------------- Encryption Setup --------------------
-# IMPORTANT: Keep this key secure
-ENCRYPTION_KEY = b'MySecureKey12345MySecureKey12345'  # Must be exactly 32 bytes for AES-256
+# encryption setup
+# AES-256
 
 def pad_data(data):
     """PKCS7 padding"""
@@ -17,7 +18,6 @@ def pad_data(data):
 def encrypt_data(plaintext):
     """Encrypt data using AES-256-CBC"""
     try:
-        # Generate a simple IV based on time
         import utime
         ms = utime.ticks_ms()
         iv_bytes = []
@@ -25,18 +25,15 @@ def encrypt_data(plaintext):
             iv_bytes.append((ms >> (i * 2)) & 0xFF)
         iv = bytes(iv_bytes)
         
-        # Convert string to bytes if needed
         if isinstance(plaintext, str):
             plaintext = plaintext.encode('utf-8')
         
-        # Pad the plaintext
         padded = pad_data(plaintext)
         
         # Encrypt using AES CBC mode
-        cipher = aes(ENCRYPTION_KEY, 2, iv)  # mode 2 = CBC
+        cipher = aes(ENCRYPTION_KEY, 2, iv)
         encrypted = cipher.encrypt(padded)
-        
-        # Return IV + encrypted data, base64 encoded
+
         combined = iv + encrypted
         return ubinascii.b2a_base64(combined).decode('utf-8').strip()
         
@@ -44,7 +41,59 @@ def encrypt_data(plaintext):
         print("Encryption error:", e)
         return None
 
-# -------------------- WiFi Setup (FIRST!) --------------------
+def disable_unused_ports():
+
+    print("DEVICE HARDENING: DISABLING UNUSED PORTS")
+    
+    # Disable Access Point mode
+    try:
+        ap = network.WLAN(network.AP_IF)
+        if ap.active():
+            ap.active(False)
+            print("✓ WiFi Access Point disabled")
+        else:
+            print("✓ WiFi Access Point already disabled")
+    except Exception as e:
+        print("  AP disable error:", e)
+    
+    # Disable Bluetooth
+    try:
+        import bluetooth
+        ble = bluetooth.BLE()
+        if ble.active():
+            ble.active(False)
+            print("✓ Bluetooth disabled")
+        else:
+            print("✓ Bluetooth already disabled")
+    except:
+        print("✓ Bluetooth not available (already disabled)")
+    
+    # Disable WebREPL
+    try:
+        import webrepl
+        webrepl.stop()
+        print("✓ WebREPL disabled")
+    except:
+        print("✓ WebREPL not active")
+    
+    # Secure unused GPIO pins
+    unused_pins = [2, 4, 15, 16, 17, 18, 33, 34, 35, 36, 39]
+    
+    secured_count = 0
+    for pin_num in unused_pins:
+        try:
+            pin = Pin(pin_num, Pin.IN, Pin.PULL_DOWN)
+            secured_count += 1
+        except:
+            pass  # Some pins might not be available
+    
+    print(f"✓ Secured {secured_count} unused GPIO pins")
+    
+    print("="*50)
+    print("DEVICE HARDENING COMPLETE")
+    print("="*50 + "\n")
+
+# Wifi Setup
 def connect_wifi(ssid, password, timeout=10):
     wlan = network.WLAN(network.STA_IF)
     wlan.active(True)
@@ -63,29 +112,26 @@ def connect_wifi(ssid, password, timeout=10):
     print('WiFi connected:', wlan.ifconfig()[0])
     return True
 
-# Connect to WiFi BEFORE initializing anything else
-WIFI_SSID = "RideAlert-WiFi"
-WIFI_PASSWORD = "ride-alert05"
+disable_unused_ports()
+
 connect_wifi(WIFI_SSID, WIFI_PASSWORD)
 
-from machine import UART, Pin, I2C
-import time, struct, utime, _thread
+from machine import UART, I2C
+import struct, utime, _thread
 from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 
-# -------------------- Configuration --------------------
-API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
-STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/iot/device/"
-FLEET_ID = "68bee7eb753d0934fd57bdea"
-DEVICE_ID = "68e20f304073a18ae0f980b4"
-POST_INTERVAL = 5  # Send data every 5 seconds
+# config
+API_ENDPOINT = "https://ridealert-backend-1.onrender.com/predict"
+STATUS_ENDPOINT = "https://ridealert-backend-1.onrender.com/vehicles/iot/device/"
+POST_INTERVAL = 5  # meaning it sends data every 5 seconds
 
-# -------------------- LCD Setup --------------------
+# lcd setup
 I2C_ADDR = 0x27
 i2c_lcd = I2C(0, scl=Pin(5), sda=Pin(19), freq=100000)
 lcd = I2cLcd(i2c_lcd, I2C_ADDR, 4, 20)
 
-# Thread-safe LCD lock
+# thread-safe LCD lock
 lcd_lock = _thread.allocate_lock()
 
 def show_message(line1="", line2="", line3="", line4=""):
@@ -97,7 +143,6 @@ def show_message(line1="", line2="", line3="", line4=""):
         lcd.move_to(0,2); lcd.putstr(line3[:20])
         lcd.move_to(0,3); lcd.putstr(line4[:20])
 
-# -------------------- GPS Setup --------------------
 try:
     gps = UART(1, baudrate=9600, tx=18, rx=16)
     gps_enabled = True
@@ -257,7 +302,7 @@ def display_gps_data():
     print("Alt:", gps_data['altitude'], "Speed:", gps_data['speed'])
     print("Fix:", gps_data['fix_status'], "Sats:", gps_data['satellites'])
 
-# -------------------- MPU6050 Setup --------------------
+# mpu setup
 MPU_ADDR = 0x68
 i2c_bus = I2C(1, scl=Pin(22), sda=Pin(21))
 mpu_enabled = MPU_ADDR in i2c_bus.scan()
@@ -345,9 +390,8 @@ def get_keypad_from_queue():
             return keypad_queue.pop(0)
     return None
 
-# -------------------- API POST Functions --------------------
+# API post
 def send_keypad_status(key):
-    """Send ENCRYPTED keypad press to status endpoint"""
     try:
         url = STATUS_ENDPOINT + DEVICE_ID
         
@@ -365,8 +409,9 @@ def send_keypad_status(key):
         # Send as encrypted string
         encrypted_payload = {"encrypted_data": encrypted_data}
         
-        print("Sending encrypted keypad status...")
-        print("Encrypted:", encrypted_data[:50] + "...")  # Show first 50 chars
+        print("Sending encrypted sensor data...")
+        print("FULL ENCRYPTED DATA:")
+        print(encrypted_data)  # PRINTS FULL ENCRYPTED STRING
         
         headers = {'Content-Type': 'application/json'}
         response = urequests.post(url, data=ujson.dumps(encrypted_payload), headers=headers)
@@ -381,7 +426,6 @@ def send_keypad_status(key):
         return False
 
 def send_sensor_data():
-    """Send ENCRYPTED sensor data to API endpoint"""
     try:
         ax, ay, az = mpu_latest["accel"]
         gx, gy, gz = mpu_latest["gyro"]
@@ -391,7 +435,7 @@ def send_sensor_data():
             "fleet_id": FLEET_ID,
             "device_id": DEVICE_ID,
             "Cn0DbHz": float(gps_data.get('satellites', '0')) * 4.0 + 30.0,
-            "Svid": int(gps_data.get('satellites', '0')) if gps_data.get('satellites', '0').isdigit() else 0,
+            "Svid": int(gps_data.get('satellites', '0')) if gps_data.get('satellites', '0').isdigit() else 8,
             "SvElevationDegrees": 35.2,
             "SvAzimuthDegrees": 120.8,
             "IMU_MessageType": "UncalAccel",
@@ -417,10 +461,11 @@ def send_sensor_data():
             return False
         
         # Send as encrypted string
-        encrypted_payload = {"encrypted_data": encrypted_data}
+        encrypted_payload = {"encrypted_data": encrypted_data}  
         
         print("Sending encrypted sensor data...")
-        print("Encrypted:", encrypted_data[:50] + "...")  # Show first 50 chars
+        print("FULL ENCRYPTED DATA:")
+        print(encrypted_data)  # PRINTS FULL ENCRYPTED STRING
         
         headers = {'Content-Type': 'application/json'}
         response = urequests.post(API_ENDPOINT, data=ujson.dumps(encrypted_payload), headers=headers)
@@ -452,7 +497,7 @@ def mpu_thread():
         time.sleep(2)
 
 def sensor_post_thread():
-    """Background thread for posting sensor data"""
+
     print("Sensor POST thread started")
     last_post = 0
     
@@ -461,10 +506,7 @@ def sensor_post_thread():
             current_time = time.time()
             
             if current_time - last_post >= POST_INTERVAL:
-                if gps_data.get('fix_status') == "Active":
-                    send_sensor_data()
-                else:
-                    print("Skipping sensor post - waiting for GPS fix")
+                send_sensor_data()
                 last_post = current_time
             
             time.sleep(1)
@@ -491,11 +533,13 @@ def keypad_post_thread():
             print("Keypad POST thread error:", e)
             time.sleep(1)
 
-# -------------------- Initialization --------------------
+# Initialization
 print("System Running...")
 show_message("Bus Online", "Initializing...")
 
 print("Initialization complete!")
+print("Using STATIC GPS data for testing")
+display_gps_data()
 show_message("Bus Online", "Monitoring...")
 
 # Start all background threads
@@ -517,7 +561,7 @@ try:
 except Exception as e:
     print("Failed to start keypad POST thread:", e)
 
-# -------------------- Main Loop --------------------
+# this is the main loop
 loop_count = 0
 last_gps_display = 0
 
@@ -528,6 +572,7 @@ while True:
     if gps_enabled:
         read_gps()
         
+        # Display GPS info every 5 seconds
         if current_time - last_gps_display >= 5:
             sats = gps_data.get('satellites', '0')
             if gps_data.get('fix_status') == "Active":
