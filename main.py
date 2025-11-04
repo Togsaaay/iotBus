@@ -4,7 +4,7 @@ import urequests
 import ujson
 import ubinascii
 from ucryptolib import aes
-from machine import Pin  # Import Pin at the top
+from machine import Pin
 from config import WIFI_SSID, WIFI_PASSWORD, ENCRYPTION_KEY, FLEET_ID, DEVICE_ID
 
 # encryption setup
@@ -43,7 +43,7 @@ def encrypt_data(plaintext):
 
 def disable_unused_ports():
 
-    print("DEVICE HARDENING: DISABLING UNUSED PORTS")
+    print("\nDEVICE HARDENING: DISABLING UNUSED PORTS")
     
     # Disable Access Point mode
     try:
@@ -89,9 +89,7 @@ def disable_unused_ports():
     
     print(f"✓ Secured {secured_count} unused GPIO pins")
     
-    print("="*50)
     print("DEVICE HARDENING COMPLETE")
-    print("="*50 + "\n")
 
 # Wifi Setup
 def connect_wifi(ssid, password, timeout=10):
@@ -157,7 +155,6 @@ gps_data = {'utc_time':'','date':'','latitude':'','longitude':'',
             'raw_latitude': 0.0, 'raw_longitude': 0.0, 'raw_altitude': 0.0, 'raw_speed': 0.0}
 
 def convert_coord(coord, direction):
-    """Convert NMEA coordinate format to decimal degrees"""
     try:
         if not coord or not direction:
             return "0.0"
@@ -183,7 +180,6 @@ def convert_coord(coord, direction):
         return "0.0"
 
 def convert_coord_raw(coord, direction):
-    """Convert NMEA coordinate format to raw decimal degrees (float)"""
     try:
         if not coord or not direction:
             return 0.0
@@ -209,7 +205,6 @@ def convert_coord_raw(coord, direction):
         return 0.0
     
 def parse_nmea(sentence):
-    """Parse NMEA sentence"""
     try:
         if not sentence or not sentence.startswith('$'):
             return
@@ -269,7 +264,6 @@ def parse_nmea(sentence):
         print("NMEA parse error:", e)
 
 def read_gps():
-    """Read and parse GPS data (non-blocking)"""
     if not gps_enabled or not gps:
         return False
     
