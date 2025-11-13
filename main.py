@@ -385,32 +385,59 @@ def get_keypad_from_queue():
     return None
 
 # API post
+# def send_keypad_status(key):
+#     try:
+#         url = STATUS_ENDPOINT + DEVICE_ID
+        
+#         # Prepare payload
+#         payload = {"key": key}
+#         json_data = ujson.dumps(payload)
+        
+#         # Encrypt the entire payload
+#         encrypted_data = encrypt_data(json_data)
+        
+#         if not encrypted_data:
+#             print("Encryption failed")
+#             return False
+        
+#         # Send as encrypted string
+#         encrypted_payload = {"encrypted_data": encrypted_data}
+        
+#         print("Sending encrypted sensor data...")
+#         print("FULL ENCRYPTED DATA:")
+#         print(encrypted_data)  # PRINTS FULL ENCRYPTED STRING
+        
+#         headers = {'Content-Type': 'application/json'}
+#         response = urequests.post(url, data=ujson.dumps(encrypted_payload), headers=headers)
+        
+#         print("Status Response:", response.status_code)
+        
+#         response.close()
+#         return True
+        
+#     except Exception as e:
+#         print("Status API error:", e)
+#         return False
+
 def send_keypad_status(key):
+    """Send keypad press to status endpoint"""
     try:
+        # Build the full URL with device ID
         url = STATUS_ENDPOINT + DEVICE_ID
         
-        # Prepare payload
+        # Prepare JSON payload
         payload = {"key": key}
         json_data = ujson.dumps(payload)
         
-        # Encrypt the entire payload
-        encrypted_data = encrypt_data(json_data)
+        print("Sending keypad status to:", url)
+        print("Payload:", json_data)
         
-        if not encrypted_data:
-            print("Encryption failed")
-            return False
-        
-        # Send as encrypted string
-        encrypted_payload = {"encrypted_data": encrypted_data}
-        
-        print("Sending encrypted sensor data...")
-        print("FULL ENCRYPTED DATA:")
-        print(encrypted_data)  # PRINTS FULL ENCRYPTED STRING
-        
+        # Send POST request
         headers = {'Content-Type': 'application/json'}
-        response = urequests.post(url, data=ujson.dumps(encrypted_payload), headers=headers)
+        response = urequests.post(url, data=json_data, headers=headers)
         
         print("Status Response:", response.status_code)
+        print("Response:", response.text)
         
         response.close()
         return True
@@ -418,6 +445,7 @@ def send_keypad_status(key):
     except Exception as e:
         print("Status API error:", e)
         return False
+
 
 def send_sensor_data():
     try:
