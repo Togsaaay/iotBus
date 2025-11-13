@@ -120,8 +120,8 @@ from lcd_api import LcdApi
 from i2c_lcd import I2cLcd
 
 # config
-API_ENDPOINT = "https://ridealert-backend-1.onrender.com/predict"
-STATUS_ENDPOINT = "https://ridealert-backend-1.onrender.com/vehicles/iot/device/"
+API_ENDPOINT = "https://ridealert-backend.onrender.com/predict"
+STATUS_ENDPOINT = "https://ridealert-backend.onrender.com/vehicles/iot/device/"
 POST_INTERVAL = 5  # meaning it sends data every 5 seconds
 
 # lcd setup
